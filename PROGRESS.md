@@ -47,6 +47,21 @@ Ordem de resolução: `--model` → `DURABLE_PI_MODEL` → config → erro de us
 `--model` não é pegajoso: o modelo gravado na sessão é o último aplicado, nunca
 o default da próxima execução. Exemplo em `docs/agent-config.example.json`.
 
+## Auditoria do M1.0
+
+`docs/audits/2026-10-22-m1-0.md` (gpt-6.1-sol, thinking high). Dez achados
+confirmados, nenhum refutado. Ordem de correção escolhida:
+
+1. Recuperação só vale no mesmo banco: CLI sem `--session`/`-c` cria id novo.
+2. Lock com corrida na janela `open(wx)`→`writeFile` e PID que não identifica
+   dono entre containers (`EPERM` lido como morte).
+3. `cwd` interno (`/workspace`) não distingue dois projetos no container.
+4. Janela entre limpar a intenção e imprimir a resposta.
+5. Uma intenção implícita só; `randomUUID()` dentro do callback de commit;
+   bootstrap não fecha o Harness em falha de `agent()`/`configure()`.
+6. Invariante 1 da spec do handoff confunde admissão com colocação (`queued`).
+7. Helper de `chown` do run.sh sem `keep-id` no podman rootless.
+
 ## Pendências
 
 - **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial
