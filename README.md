@@ -84,8 +84,22 @@ distro. O binário fica no lado Windows:
 scripts/run.sh --help          # detecta wslc sozinho
 ```
 
-`scripts/run.sh` usa `DURABLE_PI_RUNTIME=docker|wslc` (padrão `auto`) e
-`DURABLE_PI_WSLC` para o caminho do binário.
+`scripts/run.sh` detecta podman, wslc ou docker (`auto` tenta nessa ordem) e
+aceita caminhos explícitos por variável de ambiente ou por arquivo de config,
+com o ambiente vencendo o arquivo:
+
+```bash
+# ~/.config/durable-pi/container.conf  (modelo em scripts/container.conf.example)
+DURABLE_PI_RUNTIME=auto
+DURABLE_PI_WSLC="/mnt/c/Program Files/WSL/wslc.exe"
+# DURABLE_PI_PODMAN=/usr/bin/podman
+# DURABLE_PI_DOCKER=/usr/bin/docker
+# DURABLE_PI_IMAGE=durable-pi:dev
+# DURABLE_PI_VOLUME=durable-pi-home
+```
+
+`scripts/run.sh --runtime-info` mostra runtime, binário, imagem, volume e
+caminho do config sem executar nada.
 
 ### Credenciais
 
