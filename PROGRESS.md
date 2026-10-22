@@ -62,6 +62,22 @@ confirmados, nenhum refutado. Ordem de correção escolhida:
 6. Invariante 1 da spec do handoff confunde admissão com colocação (`queued`).
 7. Helper de `chown` do run.sh sem `keep-id` no podman rootless.
 
+## Fechamento do M1.0
+
+Corrigido depois da auditoria (`docs/audits/2026-10-22-m1-0.md`):
+
+- lock por unix socket (`<db>.sock`), sem PID e imune a namespace;
+- identidade de workspace no host (`DURABLE_PI_WORKSPACE`), com recusa de
+  retomada em outro projeto mesmo com `cwd` igual;
+- `--env-file` no lugar de `-e NAME`: o wslc ignorava `-e` sem valor, então
+  nenhuma variável chegava ao container (nem chave de API, nem workspace);
+- `app.control` v2 com lista de intenções (teto 8) e `migrate` da v1;
+- `randomUUID()` fora do commit, bootstrap fechando o Harness em qualquer
+  falha, `chown` fora do caminho podman rootless;
+- CLI imprime `sessão: <id>` em falha: recuperação exige `--session`/`-c`;
+- spec do handoff corrigida (admissão ≠ colocação; handle morre com o
+  Harness) e testes do muse regerados.
+
 ## Pendências
 
 - **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial
