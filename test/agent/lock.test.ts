@@ -16,11 +16,11 @@ async function withDb(run: (dbPath: string) => Promise<void>) {
 }
 
 describe("acquireStorageLock", () => {
-	it("recusa um segundo dono enquanto o processo está vivo", async () => {
+	it("recusa um segundo dono enquanto o primeiro escuta", async () => {
 		await withDb(async (dbPath) => {
 			const lock = await acquireStorageLock(dbPath);
 			await expect(acquireStorageLock(dbPath)).rejects.toThrow(
-				/em uso pelo processo/,
+				/em uso por outro processo/,
 			);
 			await lock.release();
 		});
@@ -32,19 +32,37 @@ describe("acquireStorageLock", () => {
 			await first.release();
 
 			const second = await acquireStorageLock(dbPath);
+			expect(second.path).toBe(`${dbPath}.sock`);
 			await second.release();
 		});
 	});
 
-	it("toma lock órfão de processo que não existe mais", async () => {
+	it("toma o socket órfão de processo que morreu", async () => {
 		await withDb(async (dbPath) => {
-			// PID que não existe: crash deixou o arquivo para trás.
-			await writeFile(`${dbPath}.lock`, "999999\n");
+			// Arquivo comum no lugar do socket: `connect()` recusa, como num crash.
+			await writeFile(`${dbPath}.sock`, "");
 
 			const lock = await acquireStorageLock(dbPath);
 
-			expect(lock.path).toBe(`${dbPath}.lock`);
+			expect(lock.path).toBe(`${dbPath}.sock`);
 			await lock.release();
+		});
+	});
+
+	it("vários concorrentes: só um ganha", async () => {
+		await withDb(async (dbPath) => {
+			const results = await Promise.allSettled([
+				acquireStorageLock(dbPath),
+				acquireStorageLock(dbPath),
+				acquireStorageLock(dbPath),
+			]);
+
+			const ganhos = results.filter(
+				(result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireStorageLock>>> =>
+					result.status === "fulfilled",
+			);
+			expect(ganhos.length).toBe(1);
+			await ganhos[0]?.value.release();
 		});
 	});
 });

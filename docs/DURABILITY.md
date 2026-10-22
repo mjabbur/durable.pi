@@ -145,7 +145,9 @@ Regras que o teste fixa (`test/crash-agent.test.ts`, `test/agent/harness.test.ts
   depois de um crash;
 - ids explícitos diferentes não colapsam prompts iguais: dois clientes enviando
   "oi" produzem dois inputs;
-- o `.lock` pertence ao processo, não ao frontend: morre com ele.
+- a exclusão é um unix socket (`<db>.sock`): `listen()` é atômico e
+  `connect()` diz se há dono vivo, sem depender de PID nem de namespace;
+  socket órfão de processo morto recusa conexão e é retomado.
 
 Consequência de arquitetura: web e CLI não podem segurar o storage ao mesmo
 tempo. Ou o `serve` é dono e os clientes falam HTTP/WS (M3), ou o CLI abre
