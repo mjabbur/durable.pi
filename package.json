@@ -1,0 +1,33 @@
+{
+	"name": "durable.pi",
+	"private": true,
+	"description": "Agentes dur\u00e1veis em Node/TypeScript sobre @earendil-works/pi-durable",
+	"license": "MIT",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"keywords": [
+		"durable",
+		"agents",
+		"pi",
+		"sqlite"
+	],
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"lint": "eslint ."
+	},
+	"dependencies": {
+		"@earendil-works/chord": "1.4.0",
+		"@earendil-works/pi-ai": "1.4.0",
+		"@earendil-works/pi-durable": "1.4.0"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.0",
+		"eslint": "^9.0.0",
+		"typescript": "^5.9.0",
+		"typescript-eslint": "^8.0.0",
+		"vitest": "^3.0.0"
+	}
+}

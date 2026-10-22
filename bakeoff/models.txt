@@ -1,0 +1,13 @@
+# Candidatos do bake-off, em ordem de avaliação.
+# Uso: PI_TIMEOUT=600 scripts/bakeoff.sh <provider/model> [spec]
+# Medir por artefato: wrote_test, tsc_exit e duration_s no summary.txt.
+# Control roda com outro modelo só para provar que o harness funciona; não é candidato.
+
+# escolhido: 3/3 completam em ~1 min, compila, 8/9 testes verdes contra a implementação
+opencode-go/muse-spark-1.3-contributor
+
+# fora: 3 execuções seguidas sem escrever arquivo, mesmo com 600s
+opencode-go/mimo-v2.6-flash
+
+# control
+opencode-go/deepseek-v4.1-flash
