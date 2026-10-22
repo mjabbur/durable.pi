@@ -11,9 +11,9 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
   persistida). Caminho docker/podman escrito e testado por wrapper falso.
 - M1 em andamento: `durable-pi` sem `-p` abre a TUI (transcript com streaming,
-  editor, `Ctrl+C` aborta; comandos `/help`, `/usage`, `/compact`, `/quit`).
-  Falta `!comando`, `/new`, `/resume`, `/model`, `/thinking` e o aceite de
-  `kill -9` no container.
+  editor, `Ctrl+C` aborta geração ou `!comando`; `/help`, `/usage`, `/compact`,
+  `/model`, `/thinking`, `/quit` e `!comando`). Falta `/new`, `/resume` e o
+  aceite de `kill -9` no container.
 - Recuperação e precedência de modelo provadas pelo `main()`; resta só o lock
   entre dois containers reais.
 
@@ -21,6 +21,7 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ```
 src/agent/    harness.ts (openAgent, submit, watch, ask, closeAgent),
+              shell.ts (runShell: `!comando` como entrada de exibição),
               control.ts (app.control v2: workspace + intenções),
               lock.ts (BEGIN EXCLUSIVE em <db>.lock),
               config.ts (modelo padrão), models.ts (catálogo pi-ai),
@@ -81,18 +82,24 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   inteira com terminal falso, sem TTY. Não troque isso por `VirtualTerminal`
   (dependência nova) sem motivo.
 
+- `!comando` roda fora do modelo e grava o resultado como `write` de exibição
+  (`kind: "durable.shell"`), então o bloco sobrevive ao resume sem entrar no
+  contexto do modelo. Comando interrompido não é reexecutado: não há intenção
+  durável para ele, só o resultado.
+
 ## Próximo: fechar o M1
 
 O que já está de pé: TUI com streaming, abort por `Ctrl+C` (segundo sai),
-`/help`, `/usage`, `/compact`, `/quit`, e erro de uso quando não há TTY.
+`/help`, `/usage`, `/compact`, `/model`, `/thinking`, `/quit`, `!comando` e
+erro de uso quando não há TTY.
 
 Ordem sugerida:
 
-1. `!comando`: executa bash direto, fora do modelo, com saída no transcript.
-2. `/new` e `/resume`: fechar o Harness atual e abrir outro (a TUI é dona do
-   storage). `/model` e `/thinking` via `conversation.configure()`.
-3. Aceite do marco: `kill -9` no container durante uma geração; reabrir com
-   `-c` e conferir transcript sem tool call duplicada.
+1. `/new` e `/resume`: fechar o Harness atual e abrir outro (a TUI é dona do
+   storage), com `SelectList` sobre `listSessions(dir)`.
+2. Aceite do marco: `kill -9` no container durante uma geração; reabrir com
+   `-c` e conferir transcript sem tool call duplicada, agora com uma tool em
+   voo e efeito já commitado.
 
 Limite: a TUI é dona do storage (um processo por storage). Quando o servidor
 web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.

@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import { withCancel } from "@earendil-works/chord/context";
 import type { Submission } from "@earendil-works/pi-durable";
 import { watchEvents } from "@earendil-works/pi-durable";
 import {
@@ -16,6 +17,12 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { submit, watch, type AgentSession } from "../agent/harness.js";
+import {
+	isThinkingLevel,
+	parseModelRef,
+	THINKING_LEVELS,
+} from "../agent/models.js";
+import { runShell } from "../agent/shell.js";
 import {
 	applyEvents,
 	fromSnapshot,
@@ -50,6 +57,8 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 
 	let state: Transcript;
 	let busy: Submission | undefined;
+	/** `!comando` em execução: `Ctrl+C` cancela o processo filho. */
+	let shell: { readonly cancel: () => void } | undefined;
 	let exited = false;
 	let exitCode = 0;
 	let resolveExit: (exit: TuiExit) => void = () => undefined;
@@ -62,11 +71,19 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	const editor = new Editor(tui, editorTheme, { paddingX: 1 });
 	const notices: string[] = [];
 
-	const agent = await session.conversation.agent(context);
-	const modelLabel =
-		agent.model === undefined
-			? "modelo?"
-			: `${agent.model.provider}/${agent.model.modelId}`;
+	let modelLabel = "modelo?";
+	let thinkingLevel = "off";
+
+	async function refreshAgent(): Promise<void> {
+		const agent = await session.conversation.agent(context);
+		modelLabel =
+			agent.model === undefined
+				? "modelo?"
+				: `${agent.model.provider}/${agent.model.modelId}`;
+		thinkingLevel = agent.thinkingLevel;
+	}
+
+	await refreshAgent();
 
 	function finish(code: number): void {
 		if (exited) return;
@@ -87,10 +104,12 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	}
 
 	function statusLine(): string {
-		const turn = busy === undefined ? "ocioso" : "gerando";
+		const turn =
+			busy !== undefined ? "gerando" : shell !== undefined ? "shell" : "ocioso";
 		const queue = state.queued > 0 ? ` · fila ${state.queued}` : "";
+		const thinking = thinkingLevel === "off" ? "" : ` · ${thinkingLevel}`;
 		return theme.dim(
-			`${modelLabel} · ${turn} · ${state.tokens} tokens${queue}`,
+			`${modelLabel}${thinking} · ${turn} · ${state.tokens} tokens${queue}`,
 		);
 	}
 
@@ -120,12 +139,39 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		}
 	}
 
+	async function shellCommand(command: string): Promise<void> {
+		if (command === "") {
+			notify("uso: !comando");
+			return;
+		}
+		if (shell !== undefined) {
+			notify("já existe um comando em execução");
+			return;
+		}
+		// Contexto próprio: `Ctrl+C` cancela o filho sem cancelar a sessão.
+		const cancelable = withCancel(context);
+		shell = { cancel: cancelable.cancel };
+		render();
+		try {
+			const run = await runShell(session, command, cancelable.context);
+			if (run.aborted) notify(`!${command}: abortado`);
+		} catch (error) {
+			notify(`falha em !${command}: ${describe(error)}`);
+		} finally {
+			shell = undefined;
+			render();
+		}
+	}
+
 	async function command(text: string): Promise<void> {
 		const [rawName, ...rest] = text.slice(1).split(/\s+/);
 		const name = rawName ?? "";
 		switch (name) {
 			case "help":
-				notify("comandos: /help, /usage, /compact, /quit");
+				notify(
+					"comandos: /help, /usage, /compact, /model, /thinking, /quit; " +
+						"!comando roda no shell",
+				);
 				return;
 			case "usage":
 				notify(`${state.tokens} tokens nesta sessão`);
@@ -134,6 +180,39 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				await session.conversation.compact(undefined, context);
 				notify("compactação pedida");
 				return;
+			case "model": {
+				const text = rest.join(" ").trim();
+				if (text === "") {
+					notify(`modelo atual: ${modelLabel}`);
+					return;
+				}
+				try {
+					const model = parseModelRef(text);
+					await session.conversation.configure({ model }, context);
+					await refreshAgent();
+					render();
+					notify(`modelo: ${modelLabel}`);
+				} catch (error) {
+					notify(describe(error));
+				}
+				return;
+			}
+			case "thinking": {
+				const level = rest.join(" ").trim();
+				if (level === "") {
+					notify(`nível atual: ${thinkingLevel}`);
+					return;
+				}
+				if (!isThinkingLevel(level)) {
+					notify(`nível inválido: ${level} (${THINKING_LEVELS.join(", ")})`);
+					return;
+				}
+				await session.conversation.configure({ thinkingLevel: level }, context);
+				await refreshAgent();
+				render();
+				notify(`raciocínio: ${thinkingLevel}`);
+				return;
+			}
 			case "quit":
 			case "exit":
 				finish(0);
@@ -148,12 +227,14 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		if (prompt === "") return;
 		editor.addToHistory(prompt);
 		if (prompt.startsWith("/")) void command(prompt);
+		else if (prompt.startsWith("!")) void shellCommand(prompt.slice(1).trim());
 		else void ask(prompt);
 	};
 
 	tui.addInputListener((data) => {
 		if (!matchesKey(data, "ctrl+c")) return undefined;
-		// Primeiro `Ctrl+C` aborta a submissão; o segundo, sem geração, sai.
+		// Primeiro `Ctrl+C` aborta o que está rodando (geração ou `!comando`);
+		// o segundo, sem nada em voo, sai.
 		if (busy !== undefined) {
 			const submission = busy;
 			busy = undefined;
@@ -161,6 +242,11 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			void submission
 				.abort(context)
 				.catch((error: unknown) => notify(describe(error)));
+			return { consume: true };
+		}
+		if (shell !== undefined) {
+			shell.cancel();
+			notify("cancelando o comando");
 			return { consume: true };
 		}
 		finish(exitCode);
@@ -224,6 +310,16 @@ function componentOf(block: TranscriptBlock): Component {
 			return assistantComponent(block.text, block.thinking);
 		case "tool":
 			return toolComponent(block);
+		case "shell": {
+			const marker = block.exitCode === 0 ? "✓" : "✗";
+			const head = `${marker} ${theme.bold(`!${block.command}`)}`;
+			const tail = block.output.trimEnd().split("\n").slice(-20).join("\n");
+			return new Text(
+				tail === "" ? head : `${head}\n${theme.dim(tail)}`,
+				1,
+				0,
+			);
+		}
 		case "notice":
 			return new Text(theme.dim(`· ${block.text}`), 1, 0);
 	}

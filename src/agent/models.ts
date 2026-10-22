@@ -1,4 +1,5 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type { ModelRef } from "@earendil-works/pi-durable";
+import type { ModelThinkingLevel, Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 /**
@@ -12,4 +13,40 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
  */
 export function createAgentModels(): Models {
 	return builtinModels();
+}
+
+/** Níveis de raciocínio aceitos pelo `pi-ai`; `satisfies` falha se a lista divergir. */
+export const THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const satisfies readonly ModelThinkingLevel[];
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+	return (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+export class InvalidModelRefError extends Error {
+	constructor(text: string) {
+		super(`modelo inválido: ${text} (esperado provider/modelo)`);
+		this.name = "InvalidModelRefError";
+	}
+}
+
+/** `provider/modelo`: o primeiro `/` separa, o resto pertence ao id do modelo. */
+export function parseModelRef(text: string): ModelRef {
+	const slash = text.indexOf("/");
+	if (slash <= 0 || slash === text.length - 1) {
+		throw new InvalidModelRefError(text);
+	}
+	return {
+		provider: text.slice(0, slash),
+		modelId: text.slice(slash + 1),
+	};
 }

@@ -11,6 +11,8 @@ import {
 	type UsageState,
 } from "@earendil-works/pi-durable";
 
+import { SHELL_ENTRY_KIND } from "../agent/shell.js";
+
 /**
  * Um bloco de transcript pronto para desenhar. O reducer é puro e não conhece
  * terminal: a TUI só transforma isto em componentes.
@@ -28,6 +30,12 @@ export type TranscriptBlock =
 			readonly callId: string;
 			readonly name: string;
 			readonly status: "running" | "done" | "error";
+			readonly output: string;
+	  }
+	| {
+			readonly kind: "shell";
+			readonly command: string;
+			readonly exitCode: number;
 			readonly output: string;
 	  }
 	| { readonly kind: "notice"; readonly text: string };
@@ -240,7 +248,27 @@ function blockOf(entry: EntryRecord): TranscriptBlock | undefined {
 	if (CompactionEntry.is(entry)) {
 		return { kind: "notice", text: "contexto compactado" };
 	}
-	return undefined;
+	return shellBlock(entry);
+}
+
+/** `!comando`: entrada de exibição, sem mensagem para o modelo. */
+function shellBlock(entry: EntryRecord): TranscriptBlock | undefined {
+	if (entry.kind !== SHELL_ENTRY_KIND) return undefined;
+	const data = entry.data;
+	if (typeof data !== "object" || data === null || Array.isArray(data)) {
+		return undefined;
+	}
+	const record = data as Record<string, unknown>;
+	const command = record["command"];
+	const exitCode = record["exitCode"];
+	const output = record["output"];
+	if (typeof command !== "string") return undefined;
+	return {
+		kind: "shell",
+		command,
+		exitCode: typeof exitCode === "number" ? exitCode : 1,
+		output: typeof output === "string" ? output : "",
+	};
 }
 
 function upsertTool(state: Transcript, block: TranscriptBlock): Transcript {

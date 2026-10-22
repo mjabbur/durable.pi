@@ -64,10 +64,12 @@ scripts/run.sh -c                             # TUI na sessão mais recente
 ```
 
 Sem `-p` o CLI abre a TUI (exige TTY): transcript com streaming, editor e
-`Ctrl+C` para abortar a geração — o segundo `Ctrl+C`, ocioso, sai. Comandos:
-`/help`, `/usage`, `/compact`, `/quit`. `!comando` e os comandos que trocam de
-sessão ou de modelo (`/new`, `/resume`, `/model`, `/thinking`) ainda não
-existem.
+`Ctrl+C` para abortar a geração ou o `!comando` em execução — o segundo
+`Ctrl+C`, ocioso, sai. Comandos: `/help`, `/usage`, `/compact`,
+`/model [p/m]`, `/thinking [nível]`, `/quit`, e `!comando` roda no shell do
+workspace, fora do modelo. O resultado do `!` fica no transcript como entrada
+durável, então reaparece ao retomar; comando interrompido não é reexecutado.
+`/new` e `/resume` ainda não existem.
 
 | Flag | Efeito |
 |---|---|

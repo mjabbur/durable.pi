@@ -7,6 +7,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { ModelRef } from "@earendil-works/pi-durable";
 
 import { agentConfigPath, readAgentConfig } from "../agent/config.js";
+import { InvalidModelRefError, parseModelRef } from "../agent/models.js";
 import { ask, closeAgent, openAgent, type AgentSession } from "../agent/harness.js";
 import {
 	ensureSessionDir,
@@ -76,7 +77,7 @@ export async function main(
 			await ensureSessionDir(dir);
 		}
 
-		const model = parseModel(await resolveModelText(options));
+		const model = parseModelOrUsage(await resolveModelText(options));
 		const id = await resolveSessionId(dir, options);
 		sessionId = id;
 		session = await openAgent(
@@ -190,17 +191,16 @@ async function resolveSessionId(
 	return newSessionId();
 }
 
-export function parseModel(text: string): ModelRef {
-	const slash = text.indexOf("/");
-	if (slash <= 0 || slash === text.length - 1) {
-		throw new UsageError(
-			`modelo inválido: ${text} (esperado provider/modelo)`,
-		);
+/** `--model` malformado é erro de uso (código 2), não falha de execução. */
+function parseModelOrUsage(text: string): ModelRef {
+	try {
+		return parseModelRef(text);
+	} catch (error) {
+		if (error instanceof InvalidModelRefError) {
+			throw new UsageError(error.message);
+		}
+		throw error;
 	}
-	return {
-		provider: text.slice(0, slash),
-		modelId: text.slice(slash + 1),
-	};
 }
 
 function describe(error: unknown): string {
