@@ -116,7 +116,42 @@ Asserts que importam:
 - nenhuma entry parcial no transcript;
 - `requestId` repetido devolve a mesma submissão, não cria outra.
 
-## 8. Escolha de storage
+## 8. Handoff entre frontends
+
+Problema: a sessão começa na web, o usuário fecha o browser e retoma no CLI.
+Cada frontend tem um processo, um formato de saída e um ciclo de vida; o estado
+não pode morar em nenhum deles.
+
+Solução: o durável é a conversa, não o cliente. Um frontend só faz quatro
+coisas: `submit()` (admite), `watch()` (espera o desfecho), assinar
+`watchEvents` (progresso) e ler o transcript. Trocar de frontend é reabrir o
+mesmo SQLite em outro processo.
+
+```ts
+// cliente A (web) admite com o id que ele guarda
+const sub = await submit(session, prompt, ctx, requestIdDoCliente);
+// processo A morre
+
+// cliente B (CLI) reabre o arquivo e usa o mesmo id
+const sub = await submit(session, prompt, ctx, requestIdDoCliente);
+const outcome = await watch(session, sub, ctx);
+```
+
+Regras que o teste fixa (`test/crash-agent.test.ts`, `test/agent/harness.test.ts`):
+
+- um input por `requestId`, mesmo atravessando processos e frontends;
+- `submit` sem id explícito (CLI) reaproveita a intenção commitada quando o
+  prompt é idêntico — é o que torna `durable-pi -p "<mesmo prompt>"` seguro
+  depois de um crash;
+- ids explícitos diferentes não colapsam prompts iguais: dois clientes enviando
+  "oi" produzem dois inputs;
+- o `.lock` pertence ao processo, não ao frontend: morre com ele.
+
+Consequência de arquitetura: web e CLI não podem segurar o storage ao mesmo
+tempo. Ou o `serve` é dono e os clientes falam HTTP/WS (M3), ou o CLI abre
+direto quando consegue o lock. Nunca os dois escrevendo no mesmo arquivo.
+
+## 9. Escolha de storage
 
 | Backend | Uso |
 |---|---|
