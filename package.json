@@ -1,7 +1,7 @@
 {
 	"name": "durable.pi",
 	"private": true,
-	"description": "Agentes dur\u00e1veis em Node/TypeScript sobre @earendil-works/pi-durable",
+	"description": "Agentes duráveis em Node/TypeScript sobre @earendil-works/pi-durable",
 	"license": "MIT",
 	"type": "module",
 	"engines": {
@@ -28,6 +28,6 @@
 		"eslint": "^9.0.0",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.0.0",
-		"vitest": "^3.0.0"
+		"vitest": "^5.0.5"
 	}
 }
