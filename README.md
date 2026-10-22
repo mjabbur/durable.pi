@@ -55,7 +55,8 @@ O agente roda em container; o host só precisa de Docker.
 ```bash
 npm run build                       # compila para dist/
 docker build -t durable-pi:dev .
-export DURABLE_PI_MODEL=opencode-go/seu-modelo
+mkdir -p ~/.config/durable-pi
+echo '{"model": "opencode-go/seu-modelo"}' > ~/.config/durable-pi/config.json
 export OPENROUTER_API_KEY=...       # a chave do provedor usado
 scripts/run.sh -p "crie hello.txt com olá"
 scripts/run.sh -c -p "agora leia o arquivo"   # continua a sessão mais recente
@@ -64,7 +65,7 @@ scripts/run.sh -c -p "agora leia o arquivo"   # continua a sessão mais recente
 | Flag | Efeito |
 |---|---|
 | `-p, --print <texto>` | prompt; imprime a resposta final e sai |
-| `--model <p/m>` | provider/modelo; sem ele, usa `DURABLE_PI_MODEL` |
+| `--model <p/m>` | provider/modelo só desta execução; sem ele, `DURABLE_PI_MODEL` ou o config |
 | `--session <id>` | abre uma sessão específica |
 | `-c, --continue` | continua a sessão mais recente |
 | `--session-dir <dir>` | diretório das sessões |
@@ -80,8 +81,11 @@ Três regras de sessão:
   processo; se o dono anterior morreu, o lock é tomado automaticamente.
 - **Sessão vinculada ao diretório.** Reabrir de outro `cwd` falha, porque o
   alvo das tools mudaria em silêncio.
-- **`--model` é persistido.** Numa sessão existente o modelo pedido é aplicado
-  via `configure()` e gravado; a próxima execução usa o novo.
+- **Modelo vem do config, não da sessão.** A ordem é `--model`, depois
+  `DURABLE_PI_MODEL`, depois `~/.config/durable-pi/config.json`
+  (`{"model": "provider/modelo"}`, sobrescrito por `DURABLE_PI_AGENT_CONFIG`).
+  `--model` vale só para a execução; a sessão guarda o último usado, mas ele
+  nunca é default.
 
 ### WSL
 

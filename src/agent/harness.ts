@@ -65,9 +65,10 @@ export function createAgentRegistry() {
  * configurada. Um processo por storage: o lock é o que garante isso.
  *
  * A sessão fica vinculada ao `cwd` da criação; reabrir de outro diretório
- * falha, porque o alvo das tools mudaria em silêncio. `--model` explícito é
- * aplicado e persistido via `configure()` — `root(..., { agent })` só vale na
- * criação.
+ * falha, porque o alvo das tools mudaria em silêncio. O modelo recebido é o
+ * efetivo da execução e é aplicado via `configure()` quando difere do gravado,
+ * porque `root(..., { agent })` só vale na criação. Default de modelo mora no
+ * arquivo de config, não na sessão.
  */
 export async function openAgent(
 	options: AgentOptions,
