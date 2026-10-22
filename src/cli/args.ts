@@ -11,7 +11,7 @@ Uso:
 
 Opções:
   -p, --print <texto>     prompt; sem modo interativo no M0
-      --model <p/m>       provider/modelo (ou DURABLE_PI_MODEL)
+      --model <p/m>       provider/modelo; default vem do config
       --session-dir <d>   diretório das sessões
       --session <id>      abre uma sessão específica
   -c, --continue          continua a sessão mais recente
