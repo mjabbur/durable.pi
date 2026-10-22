@@ -48,7 +48,7 @@ Pronto = os três verdes. O CI roda a mesma sequência.
 
 Desvio da spec atualiza a spec no mesmo PR.
 
-## Uso (M0)
+## Uso (M0/M1)
 
 O agente roda em container; o host só precisa de Docker.
 
@@ -60,11 +60,18 @@ echo '{"model": "opencode-go/seu-modelo"}' > ~/.config/durable-pi/config.json
 export OPENROUTER_API_KEY=...       # a chave do provedor usado
 scripts/run.sh -p "crie hello.txt com olá"
 scripts/run.sh -c -p "agora leia o arquivo"   # continua a sessão mais recente
+scripts/run.sh -c                             # TUI na sessão mais recente
 ```
+
+Sem `-p` o CLI abre a TUI (exige TTY): transcript com streaming, editor e
+`Ctrl+C` para abortar a geração — o segundo `Ctrl+C`, ocioso, sai. Comandos:
+`/help`, `/usage`, `/compact`, `/quit`. `!comando` e os comandos que trocam de
+sessão ou de modelo (`/new`, `/resume`, `/model`, `/thinking`) ainda não
+existem.
 
 | Flag | Efeito |
 |---|---|
-| `-p, --print <texto>` | prompt; imprime a resposta final e sai |
+| `-p, --print <texto>` | prompt; imprime a resposta final e sai (sem ele, TUI) |
 | `--model <p/m>` | provider/modelo só desta execução; sem ele, `DURABLE_PI_MODEL` ou o config |
 | `--session <id>` | abre uma sessão específica |
 | `-c, --continue` | continua a sessão mais recente |

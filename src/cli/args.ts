@@ -7,10 +7,11 @@ import {
 export const USAGE = `durable-pi — agente de código com sessão durável
 
 Uso:
-  durable-pi -p "<prompt>" [opções]
+  durable-pi                      modo interativo (TUI)
+  durable-pi -p "<prompt>"        modo impresso
 
 Opções:
-  -p, --print <texto>     prompt; sem modo interativo no M0
+  -p, --print <texto>     prompt; sem ele, abre a TUI
       --model <p/m>       provider/modelo; default vem do config
       --session-dir <d>   diretório das sessões
       --session <id>      abre uma sessão específica
@@ -19,9 +20,8 @@ Opções:
   -h, --help              esta ajuda
 `;
 
-export type PrintOptions = {
-	readonly mode: "print";
-	readonly prompt: string;
+/** Opções comuns aos dois modos: sessão, workspace e modelo. */
+export type SessionOptions = {
 	/** Só `--model`; ambiente e arquivo de config entram em `main()`. */
 	readonly model?: string;
 	readonly sessionDir: string;
@@ -30,7 +30,17 @@ export type PrintOptions = {
 	readonly noSession: boolean;
 };
 
-export type CliOptions = PrintOptions | { readonly mode: "help" };
+export type PrintOptions = SessionOptions & {
+	readonly mode: "print";
+	readonly prompt: string;
+};
+
+/** Sem prompt, o CLI abre a TUI. */
+export type InteractiveOptions = SessionOptions & {
+	readonly mode: "interactive";
+};
+
+export type CliOptions = PrintOptions | InteractiveOptions | { readonly mode: "help" };
 
 export class UsageError extends Error {}
 
@@ -95,8 +105,8 @@ export function parseArgs(
 		}
 	}
 
-	const text = prompt ?? words.join(" ");
-	if (text.trim() === "") {
+	const text = (prompt ?? words.join(" ")).trim();
+	if (text === "" && prompt !== undefined) {
 		throw new UsageError("informe um prompt com -p ou como argumento");
 	}
 
@@ -117,15 +127,18 @@ export function parseArgs(
 		}
 	}
 
-	return {
-		mode: "print",
-		prompt: text,
+	const shared = {
 		...(model === undefined ? {} : { model }),
 		sessionDir: sessionDir ?? defaultSessionDir(env),
 		...(sessionId === undefined ? {} : { sessionId }),
 		resume,
 		noSession,
 	};
+
+	// Sem texto, o modo é interativo. `-p ""` continua sendo erro de uso.
+	if (text === "") return { mode: "interactive", ...shared };
+
+	return { mode: "print", prompt: text, ...shared };
 }
 
 function takeValue(

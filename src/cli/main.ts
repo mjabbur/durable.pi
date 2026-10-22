@@ -14,7 +14,13 @@ import {
 	newSessionId,
 	sessionPath,
 } from "../agent/sessions.js";
-import { parseArgs, USAGE, UsageError, type PrintOptions } from "./args.js";
+import {
+	parseArgs,
+	USAGE,
+	UsageError,
+	type SessionOptions,
+} from "./args.js";
+import { runTui } from "../tui/app.js";
 
 /**
  * Injeção para teste. O catálogo de modelos é a única dependência externa do
@@ -41,6 +47,18 @@ export async function main(
 	if (options.mode === "help") {
 		process.stdout.write(USAGE);
 		return 0;
+	}
+
+	// A TUI é dona do terminal: sem TTY não há como desenhar nem ler o editor.
+	if (
+		options.mode === "interactive" &&
+		(!process.stdin.isTTY || !process.stdout.isTTY)
+	) {
+		return usageFailure(
+			new UsageError(
+				"o modo interativo exige um terminal (TTY); use -p \"...\" para modo impresso",
+			),
+		);
 	}
 
 	const context = BACKGROUND_CONTEXT;
@@ -74,14 +92,20 @@ export async function main(
 			context,
 		);
 
-		const outcome = await ask(session, options.prompt, context);
-		if (outcome.status === "done") {
-			process.stdout.write(`${outcome.answer ?? ""}\n`);
-			code = 0;
+		if (options.mode === "interactive") {
+			code = (await runTui({ session, context })).code;
 		} else {
-			process.stderr.write(`sem resposta: ${outcome.reason ?? "unanswered"}\n`);
-			writeResumeHint(sessionId);
-			code = 1;
+			const outcome = await ask(session, options.prompt, context);
+			if (outcome.status === "done") {
+				process.stdout.write(`${outcome.answer ?? ""}\n`);
+				code = 0;
+			} else {
+				process.stderr.write(
+					`sem resposta: ${outcome.reason ?? "unanswered"}\n`,
+				);
+				writeResumeHint(sessionId);
+				code = 1;
+			}
 		}
 	} catch (error) {
 		if (error instanceof UsageError) return usageFailure(error);
@@ -136,7 +160,7 @@ function usageFailure(error: unknown): number {
  * arquivo de config. A sessão guarda o último modelo usado, mas ele nunca é
  * default — `--model` de uma execução não muda a próxima.
  */
-async function resolveModelText(options: PrintOptions): Promise<string> {
+async function resolveModelText(options: SessionOptions): Promise<string> {
 	if (options.model !== undefined) return options.model;
 
 	const fromEnv = process.env["DURABLE_PI_MODEL"];
@@ -153,7 +177,7 @@ async function resolveModelText(options: PrintOptions): Promise<string> {
 
 async function resolveSessionId(
 	dir: string,
-	options: PrintOptions,
+	options: SessionOptions,
 ): Promise<string> {
 	if (options.sessionId !== undefined) return options.sessionId;
 	if (options.resume) {
