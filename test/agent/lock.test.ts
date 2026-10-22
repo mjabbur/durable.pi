@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,8 +16,29 @@ async function withDb(run: (dbPath: string) => Promise<void>) {
 	}
 }
 
+/** Processo filho que segura o lock até ser morto. */
+function holdUntilKilled(dbPath: string): Promise<import("node:child_process").ChildProcess> {
+	const script = `
+		import("node:sqlite").then(({ DatabaseSync }) => {
+			const db = new DatabaseSync(${JSON.stringify(`${dbPath}.lock`)});
+			db.exec("PRAGMA busy_timeout = 0");
+			db.exec("BEGIN EXCLUSIVE");
+			db.exec("CREATE TABLE IF NOT EXISTS owner (id INTEGER)");
+			console.log("segurando");
+			setInterval(() => {}, 1000);
+		});
+	`;
+	return new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, ["-e", script], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		child.stdout.once("data", () => resolve(child));
+		child.once("error", reject);
+	});
+}
+
 describe("acquireStorageLock", () => {
-	it("recusa um segundo dono enquanto o primeiro escuta", async () => {
+	it("recusa um segundo dono enquanto o primeiro está aberto", async () => {
 		await withDb(async (dbPath) => {
 			const lock = await acquireStorageLock(dbPath);
 			await expect(acquireStorageLock(dbPath)).rejects.toThrow(
@@ -32,19 +54,20 @@ describe("acquireStorageLock", () => {
 			await first.release();
 
 			const second = await acquireStorageLock(dbPath);
-			expect(second.path).toBe(`${dbPath}.sock`);
+			expect(second.path).toBe(`${dbPath}.lock`);
 			await second.release();
 		});
 	});
 
-	it("toma o socket órfão de processo que morreu", async () => {
+	it("toma o lock de um processo que morreu", async () => {
 		await withDb(async (dbPath) => {
-			// Arquivo comum no lugar do socket: `connect()` recusa, como num crash.
-			await writeFile(`${dbPath}.sock`, "");
+			const child = await holdUntilKilled(dbPath);
+			await expect(acquireStorageLock(dbPath)).rejects.toThrow(/em uso/);
+
+			child.kill("SIGKILL");
+			await new Promise((resolve) => child.once("exit", resolve));
 
 			const lock = await acquireStorageLock(dbPath);
-
-			expect(lock.path).toBe(`${dbPath}.sock`);
 			await lock.release();
 		});
 	});

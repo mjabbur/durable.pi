@@ -147,9 +147,9 @@ Regras que o teste fixa (`test/crash-agent.test.ts`, `test/agent/harness.test.ts
   depois de um crash;
 - ids explícitos diferentes não colapsam prompts iguais: dois clientes enviando
   "oi" produzem dois inputs;
-- a exclusão é um unix socket (`<db>.sock`): `listen()` é atômico e
-  `connect()` diz se há dono vivo, sem depender de PID nem de namespace;
-  socket órfão de processo morto recusa conexão e é retomado.
+- a exclusão é uma transação `BEGIN EXCLUSIVE` num SQLite separado
+  (`<db>.lock`, ver §9): lock do kernel, liberado na morte do processo, sem
+  PID e sem detecção de órfão.
 
 Consequência de arquitetura: web e CLI não podem segurar o storage ao mesmo
 tempo. Ou o `serve` é dono e os clientes falam HTTP/WS (M3), ou o CLI abre
@@ -166,8 +166,14 @@ direto quando consegue o lock. Nunca os dois escrevendo no mesmo arquivo.
 | `openDurableObjectSqliteStorage(ctx.storage)` | Cloudflare Durable Object |
 
 Um processo por storage. O `pi-durable` não faz lock entre processos, então o
-`durable-pi` faz: um unix socket `<db>.sock` mantido aberto enquanto o Harness
-está aberto (`src/agent/lock.ts`). `listen()` é atômico no kernel, `connect()`
-responde se há dono vivo, e socket órfão de processo morto é retomado — sem PID,
-sem relógio, sem depender do namespace do container. Para agentes de longa
-duração, SQLite. JSONL só quando o histórico é curto e inspecionável.
+`durable-pi` faz (`src/agent/lock.ts`): um SQLite auxiliar, `<db>.lock`, com
+`BEGIN EXCLUSIVE` mantido aberto enquanto o Harness está aberto. O lock é do
+kernel: não há PID, não há relógio, não há arquivo órfão para detectar, e ele é
+liberado quando o processo morre — inclusive `SIGKILL` e outro container sobre o
+mesmo volume. Alternativas descartadas: arquivo com PID (janela entre criar e
+escrever, e PID não identifica dono entre namespaces) e unix socket (remover o
+socket de um dono morto podia apagar o socket de um dono novo — o teste de três
+concorrentes pegou isso).
+
+Para agentes de longa duração, SQLite. JSONL só quando o histórico é curto e
+inspecionável.
