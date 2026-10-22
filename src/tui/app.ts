@@ -1,17 +1,19 @@
 import type { Context } from "@earendil-works/chord";
 import { withCancel } from "@earendil-works/chord/context";
-import type { Submission } from "@earendil-works/pi-durable";
+import type { AgentEventStream, Submission } from "@earendil-works/pi-durable";
 import { watchEvents } from "@earendil-works/pi-durable";
 import {
 	Container,
 	Editor,
 	Markdown,
 	ProcessTerminal,
+	SelectList,
 	Spacer,
 	Text,
 	TuiMainScreen,
 	matchesKey,
 	type Component,
+	type SelectItem,
 	type Terminal,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -22,6 +24,7 @@ import {
 	parseModelRef,
 	THINKING_LEVELS,
 } from "../agent/models.js";
+import type { SessionInfo } from "../agent/sessions.js";
 import { runShell } from "../agent/shell.js";
 import {
 	applyEvents,
@@ -31,9 +34,26 @@ import {
 } from "./transcript.js";
 import { editorTheme, markdownTheme, theme } from "./theme.js";
 
+export type SwitchedSession = {
+	readonly session: AgentSession;
+	readonly id: string;
+};
+
+/**
+ * Troca de sessão é do dono do storage, não da TUI: abrir e fechar Harness mora
+ * no `main()`. A TUI só pede e desenha o resultado.
+ */
+export type SessionSwitcher = {
+	readonly list: () => Promise<readonly SessionInfo[]>;
+	readonly open: (id: string) => Promise<SwitchedSession>;
+	readonly create: () => Promise<SwitchedSession>;
+};
+
 export type TuiOptions = {
 	readonly session: AgentSession;
 	readonly context: Context;
+	/** Sem switcher (sessão efêmera), `/new` e `/resume` ficam indisponíveis. */
+	readonly sessions?: SessionSwitcher;
 	/** Injetáveis para teste; em produção `ProcessTerminal` e `TuiMainScreen`. */
 	readonly terminal?: Terminal;
 	readonly tui?: TUI;
@@ -51,11 +71,17 @@ export type TuiExit = {
  * fica guardada para o `Ctrl+C` abortar sem matar o processo.
  */
 export async function runTui(options: TuiOptions): Promise<TuiExit> {
-	const { session, context } = options;
+	const { context, sessions } = options;
 	const terminal = options.terminal ?? new ProcessTerminal();
 	const tui = options.tui ?? new TuiMainScreen(terminal);
 
-	let state: Transcript;
+	/** Sessão atual; muda em `/new` e `/resume`. */
+	let current = options.session;
+	let stream: AgentEventStream | undefined;
+	/** Descarta eventos de um stream que já foi trocado. */
+	let attachment = 0;
+
+	let state: Transcript = fromSnapshot(emptySnapshot());
 	let busy: Submission | undefined;
 	/** `!comando` em execução: `Ctrl+C` cancela o processo filho. */
 	let shell: { readonly cancel: () => void } | undefined;
@@ -75,15 +101,13 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	let thinkingLevel = "off";
 
 	async function refreshAgent(): Promise<void> {
-		const agent = await session.conversation.agent(context);
+		const agent = await current.conversation.agent(context);
 		modelLabel =
 			agent.model === undefined
 				? "modelo?"
 				: `${agent.model.provider}/${agent.model.modelId}`;
 		thinkingLevel = agent.thinkingLevel;
 	}
-
-	await refreshAgent();
 
 	function finish(code: number): void {
 		if (exited) return;
@@ -118,11 +142,59 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		render();
 	}
 
+	/** Para de observar a sessão atual. Necessário antes de trocar de banco. */
+	async function detach(): Promise<void> {
+		const active = stream;
+		stream = undefined;
+		attachment += 1;
+		await active?.stop().catch(() => undefined);
+	}
+
+	/** Passa a desenhar outra sessão (a mesma, depois de uma troca). */
+	async function attach(next: AgentSession, label?: string): Promise<void> {
+		await detach();
+		const token = attachment;
+		current = next;
+		notices.length = 0;
+
+		const nextStream = await watchEvents(
+			next.harness,
+			next.conversation.id,
+			context,
+		);
+		stream = nextStream;
+		state = fromSnapshot(nextStream.snapshot);
+
+		nextStream.start((events) => {
+			if (token !== attachment) return Promise.resolve();
+			state = applyEvents(state, events);
+			render();
+			return Promise.resolve();
+		});
+		void nextStream.closed.then((end) => {
+			if (token !== attachment) return;
+			if (end.reason === "listener_error") notify(describe(end.error));
+		});
+		// Falha de storage encerra o Harness: não há retomada no mesmo processo.
+		void next.harness.closed.then((end) => {
+			if (token !== attachment) return;
+			if (end.reason === "failed") {
+				process.stderr.write(`sessão falhou: ${describe(end.error)}\n`);
+				finish(1);
+			}
+		});
+
+		await refreshAgent();
+		if (label !== undefined) notices.push(label);
+		render();
+	}
+
 	async function ask(prompt: string): Promise<void> {
 		if (busy !== undefined) {
 			notify("já existe uma geração em andamento");
 			return;
 		}
+		const session = current;
 		try {
 			const submission = await submit(session, prompt, context);
 			busy = submission;
@@ -153,7 +225,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		shell = { cancel: cancelable.cancel };
 		render();
 		try {
-			const run = await runShell(session, command, cancelable.context);
+			const run = await runShell(current, command, cancelable.context);
 			if (run.aborted) notify(`!${command}: abortado`);
 		} catch (error) {
 			notify(`falha em !${command}: ${describe(error)}`);
@@ -163,21 +235,75 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		}
 	}
 
+	/**
+	 * Troca de sessão: para de observar, pede a troca ao dono do storage e
+	 * reata. Se a abertura falhar, volta para a sessão anterior, que só é
+	 * fechada depois que a nova abriu.
+	 */
+	async function switchSession(
+		open: (switcher: SessionSwitcher) => Promise<SwitchedSession>,
+	): Promise<void> {
+		if (sessions === undefined) {
+			notify("sessão efêmera (--no-session): /new e /resume indisponíveis");
+			return;
+		}
+		const previous = current;
+		await detach();
+		try {
+			const switched = await open(sessions);
+			await attach(switched.session, `sessão ${switched.id}`);
+		} catch (error) {
+			notify(`falha ao trocar de sessão: ${describe(error)}`);
+			await attach(previous).catch(() => undefined);
+		}
+	}
+
+	async function resumePicker(switcher: SessionSwitcher): Promise<void> {
+		const list = await switcher.list();
+		if (list.length === 0) {
+			notify("nenhuma sessão salva");
+			return;
+		}
+		const items: SelectItem[] = list.map((session) => ({
+			value: session.id,
+			label: session.id,
+			description: formatWhen(session.modifiedAt),
+		}));
+		const picker = new SelectList(
+			items,
+			Math.min(items.length, 10),
+			editorTheme.selectList,
+		);
+		const overlay = tui.showOverlay(picker, {
+			anchor: "center",
+			maxHeight: "60%",
+		});
+		picker.onSelect = (item) => {
+			overlay.hide();
+			tui.setFocus(editor);
+			void switchSession((switcher) => switcher.open(item.value));
+		};
+		picker.onCancel = () => {
+			overlay.hide();
+			tui.setFocus(editor);
+		};
+	}
+
 	async function command(text: string): Promise<void> {
 		const [rawName, ...rest] = text.slice(1).split(/\s+/);
 		const name = rawName ?? "";
 		switch (name) {
 			case "help":
 				notify(
-					"comandos: /help, /usage, /compact, /model, /thinking, /quit; " +
-						"!comando roda no shell",
+					"comandos: /help, /usage, /compact, /model, /thinking, /new, " +
+						"/resume, /quit; !comando roda no shell",
 				);
 				return;
 			case "usage":
 				notify(`${state.tokens} tokens nesta sessão`);
 				return;
 			case "compact":
-				await session.conversation.compact(undefined, context);
+				await current.conversation.compact(undefined, context);
 				notify("compactação pedida");
 				return;
 			case "model": {
@@ -188,7 +314,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				}
 				try {
 					const model = parseModelRef(text);
-					await session.conversation.configure({ model }, context);
+					await current.conversation.configure({ model }, context);
 					await refreshAgent();
 					render();
 					notify(`modelo: ${modelLabel}`);
@@ -207,10 +333,29 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 					notify(`nível inválido: ${level} (${THINKING_LEVELS.join(", ")})`);
 					return;
 				}
-				await session.conversation.configure({ thinkingLevel: level }, context);
+				await current.conversation.configure(
+					{ thinkingLevel: level },
+					context,
+				);
 				await refreshAgent();
 				render();
 				notify(`raciocínio: ${thinkingLevel}`);
+				return;
+			}
+			case "new":
+				await switchSession((switcher) => switcher.create());
+				return;
+			case "resume": {
+				if (sessions === undefined) {
+					notify("sessão efêmera (--no-session): /new e /resume indisponíveis");
+					return;
+				}
+				const id = rest[0];
+				if (id === undefined) {
+					await resumePicker(sessions);
+					return;
+				}
+				await switchSession((switcher) => switcher.open(id));
 				return;
 			}
 			case "quit":
@@ -253,38 +398,37 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		return { consume: true };
 	});
 
-	// Falha de storage encerra o Harness: não há retomada no mesmo processo.
-	void session.harness.closed.then((end) => {
-		if (end.reason === "failed") {
-			process.stderr.write(`sessão falhou: ${describe(end.error)}\n`);
-			finish(1);
-		}
-	});
-
-	const stream = await watchEvents(session.harness, session.conversation.id, context);
-	state = fromSnapshot(stream.snapshot);
-	stream.start((events) => {
-		state = applyEvents(state, events);
-		render();
-		return Promise.resolve();
-	});
-	void stream.closed.then((end) => {
-		if (end.reason === "listener_error") notify(describe(end.error));
-	});
-
 	tui.addChild(transcript);
 	tui.addChild(new Spacer(1));
 	tui.addChild(status);
 	tui.addChild(editor);
 	tui.setFocus(editor);
-	render();
+
+	await attach(current);
 	tui.start();
 
 	try {
 		return await done;
 	} finally {
-		await stream.stop().catch(() => undefined);
+		await detach();
 	}
+}
+
+function emptySnapshot(): Parameters<typeof fromSnapshot>[0] {
+	return {
+		type: "snapshot",
+		entries: [],
+		tools: [],
+		nestedTools: [],
+		compactions: [],
+		inbox: [],
+		agent: {},
+		usage: { models: {}, tools: {} },
+	};
+}
+
+function formatWhen(modifiedAt: number): string {
+	return new Date(modifiedAt).toISOString().slice(0, 16).replace("T", " ");
 }
 
 function componentsOf(state: Transcript): Component[] {
