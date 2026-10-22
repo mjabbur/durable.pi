@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { Context } from "@earendil-works/chord";
-import { createModels, type Models } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
 	createRegistry,
@@ -14,6 +14,8 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+
+import { createAgentModels } from "./models.js";
 
 /**
  * Prompt padrão. Instruções de projeto (`AGENTS.md`) entram no M2; até lá o
@@ -65,7 +67,7 @@ export async function openAgent(
 	const harness = await Harness.open(
 		storage,
 		{
-			models: options.models ?? createModels(),
+			models: options.models ?? createAgentModels(),
 			registry: createAgentRegistry(),
 			env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? options.cwd }),
 		},

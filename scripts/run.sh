@@ -6,8 +6,9 @@
 # O cwd entra em /workspace (bind rw) e as sessões ficam no volume nomeado.
 # Credenciais entram por env, nunca por mount de ~/.pi ou ~/.config.
 #
-# Runtime: `DURABLE_PI_RUNTIME=docker|wslc` (padrão: auto). Em WSL, o `wslc`
-# vem do Windows e não está no PATH; aponte com `DURABLE_PI_WSLC` se preciso.
+# Runtime: `DURABLE_PI_RUNTIME=podman|wslc|docker` (padrão: auto, nessa ordem).
+# Em WSL, o `wslc` vem do Windows e não está no PATH; aponte com
+# `DURABLE_PI_WSLC` se preciso.
 set -euo pipefail
 
 IMAGE="${DURABLE_PI_IMAGE:-durable-pi:dev}"
@@ -16,20 +17,23 @@ RUNTIME="${DURABLE_PI_RUNTIME:-auto}"
 WSLC="${DURABLE_PI_WSLC:-/mnt/c/Program Files/WSL/wslc.exe}"
 
 if [ "$RUNTIME" = "auto" ]; then
-	if command -v docker >/dev/null 2>&1; then
-		RUNTIME=docker
+	if command -v podman >/dev/null 2>&1; then
+		RUNTIME=podman
 	elif [ -x "$WSLC" ]; then
 		RUNTIME=wslc
 	elif command -v wslc.exe >/dev/null 2>&1; then
 		RUNTIME=wslc
 		WSLC="$(command -v wslc.exe)"
+	elif command -v docker >/dev/null 2>&1; then
+		RUNTIME=docker
 	else
-		echo "nenhum runtime de container encontrado (docker ou wslc)" >&2
+		echo "nenhum runtime de container encontrado (podman, wslc ou docker)" >&2
 		exit 1
 	fi
 fi
 
 case "$RUNTIME" in
+	podman) CLI=podman ;;
 	docker) CLI=docker ;;
 	wslc) CLI="$WSLC" ;;
 	*)
