@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
@@ -64,21 +65,38 @@ export async function openAgent(
 	context: Context,
 ): Promise<AgentSession> {
 	const storage = await openNodeSqliteStorage(options.dbPath);
-	const harness = await Harness.open(
-		storage,
-		{
-			models: options.models ?? createAgentModels(),
-			registry: createAgentRegistry(),
-			env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? options.cwd }),
-		},
-		context,
-	);
-	const conversation = await harness.root(context, {
-		agent: {
-			model: options.model,
-			instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
-		},
-	});
+
+	// Cada aquisição tem dono: se o passo seguinte falhar, o anterior é liberado
+	// com contexto não cancelado, para não deixar SQLite aberto no processo.
+	let harness: Harness;
+	try {
+		harness = await Harness.open(
+			storage,
+			{
+				models: options.models ?? createAgentModels(),
+				registry: createAgentRegistry(),
+				env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? options.cwd }),
+			},
+			context,
+		);
+	} catch (error) {
+		await storage.close(BACKGROUND_CONTEXT).catch(() => undefined);
+		throw error;
+	}
+
+	let conversation: Conversation;
+	try {
+		conversation = await harness.root(context, {
+			agent: {
+				model: options.model,
+				instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
+			},
+		});
+	} catch (error) {
+		await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
+		throw error;
+	}
+
 	return { harness, conversation };
 }
 

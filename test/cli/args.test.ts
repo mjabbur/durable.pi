@@ -50,9 +50,18 @@ describe("parseArgs", () => {
 		expect(() =>
 			parseArgs(["-p", "x", "--model", "p/m", "-c", "--no-session"], env),
 		).toThrow(UsageError);
+	});
+
+	it("trata id de sessão inválido como erro de uso", () => {
 		expect(() =>
 			parseArgs(["-p", "x", "--model", "p/m", "--session", "../fora"], env),
-		).toThrow(/inválido/);
+		).toThrow(UsageError);
+	});
+
+	it("não consome a opção seguinte como valor", () => {
+		expect(() =>
+			parseArgs(["-p", "x", "--model", "p/m", "--session-dir", "--no-session"], env),
+		).toThrow(UsageError);
 	});
 
 	it("devolve ajuda sem exigir prompt", () => {
