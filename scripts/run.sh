@@ -5,26 +5,55 @@
 #
 # O cwd entra em /workspace (bind rw) e as sessões ficam no volume nomeado.
 # Credenciais entram por env, nunca por mount de ~/.pi ou ~/.config.
+#
+# Runtime: `DURABLE_PI_RUNTIME=docker|wslc` (padrão: auto). Em WSL, o `wslc`
+# vem do Windows e não está no PATH; aponte com `DURABLE_PI_WSLC` se preciso.
 set -euo pipefail
 
 IMAGE="${DURABLE_PI_IMAGE:-durable-pi:dev}"
 VOLUME="${DURABLE_PI_VOLUME:-durable-pi-home}"
-UID_GID="$(id -u):$(id -g)"
+RUNTIME="${DURABLE_PI_RUNTIME:-auto}"
+WSLC="${DURABLE_PI_WSLC:-/mnt/c/Program Files/WSL/wslc.exe}"
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-	echo "imagem $IMAGE ausente; rode: docker build -t $IMAGE ." >&2
+if [ "$RUNTIME" = "auto" ]; then
+	if command -v docker >/dev/null 2>&1; then
+		RUNTIME=docker
+	elif [ -x "$WSLC" ]; then
+		RUNTIME=wslc
+	elif command -v wslc.exe >/dev/null 2>&1; then
+		RUNTIME=wslc
+		WSLC="$(command -v wslc.exe)"
+	else
+		echo "nenhum runtime de container encontrado (docker ou wslc)" >&2
+		exit 1
+	fi
+fi
+
+case "$RUNTIME" in
+	docker) CLI=docker ;;
+	wslc) CLI="$WSLC" ;;
+	*)
+		echo "runtime desconhecido: $RUNTIME" >&2
+		exit 1
+		;;
+esac
+
+if ! "$CLI" image inspect "$IMAGE" >/dev/null 2>&1; then
+	echo "imagem $IMAGE ausente; rode: $RUNTIME build -t $IMAGE ." >&2
 	exit 1
 fi
 
-docker volume create "$VOLUME" >/dev/null
+# Idempotente: o wslc falha se o volume já existe.
+"$CLI" volume create "$VOLUME" >/dev/null 2>&1 || true
 # O volume nasce root; alinha com o usuário do host para não gravar arquivos root.
-docker run --rm --user 0:0 -v "$VOLUME:/home/agent" --entrypoint chown "$IMAGE" \
-	-R "$UID_GID" /home/agent >/dev/null
+"$CLI" run --rm --user 0:0 -v "$VOLUME:/home/agent" --entrypoint chown \
+	"$IMAGE" -R "$(id -u):$(id -g)" /home/agent >/dev/null
 
-args=(--rm -it --user "$UID_GID")
+args=(--rm --user "$(id -u):$(id -g)")
+if [ -t 0 ] && [ -t 1 ]; then args+=(-it); fi
 args+=(-v "$PWD:/workspace" -v "$VOLUME:/home/agent" -w /workspace)
 for name in DURABLE_PI_MODEL ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY GOOGLE_API_KEY; do
 	if [ -n "${!name:-}" ]; then args+=(-e "$name"); fi
 done
 
-exec docker run "${args[@]}" "$IMAGE" "$@"
+exec "$CLI" run "${args[@]}" "$IMAGE" "$@"
