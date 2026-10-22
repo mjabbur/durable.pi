@@ -24,8 +24,10 @@ type AskOutcome = {
 
 Invariantes numeradas:
 
-1. `submit()` não espera a resposta. Quando ele resolve, a entrada do usuário já
-   está no transcript (`pi.user`).
+1. `submit()` não espera a resposta: ele resolve quando o input foi admitido de
+   forma durável. Admissão **não** é colocação no transcript — se a conversa
+   estiver ocupada, a submissão fica `queued` e a entrada `pi.user` aparece
+   depois. Não exigir `pi.user` imediatamente após `submit()`.
 2. `watch()` de uma submissão concluída devolve `status: "done"` e `answer` com o
    texto do modelo.
 3. Sem `requestId` explícito, um prompt idêntico ao pendente reaproveita o id
@@ -47,6 +49,8 @@ Invariantes numeradas:
    `closeAgent()`, `watch()` sobre ele rejeita com erro de sessão fechada. Handoff
    entre frontends é feito por `requestId` (invariante 5), nunca reusando handle.
 10. `ask()` é equivalente a `submit()` seguido de `watch()`.
+11. A sessão pertence a um workspace: reabrir o mesmo banco com outro
+    `workspace` falha, mesmo que o `cwd` seja igual.
 
 Ambiente de teste: `fauxProvider()` de `@earendil-works/pi-ai`, `models` injetado
 em `openAgent`, SQLite em diretório temporário, `BACKGROUND_CONTEXT` do Chord.

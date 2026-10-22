@@ -64,3 +64,11 @@ foi verificado. Não guarde aqui o que já está em `docs/DURABILITY.md`.
 - `scripts/run.sh` passou a montar `--env-file` (0600, temporário), suportado
   por `wslc`, docker e podman. Verificado no container: `DURABLE_PI_WORKSPACE`
   agora chega com o caminho do host e a sessão recusa retomada em outro repo.
+
+## Segunda rodada de testes do handoff (muse)
+
+- Spec corrigida no invariante 1 (admissão ≠ colocação: `queued` é legal) e no 9
+  (handle morre com o Harness), mais o 11 novo (workspace do host).
+- Testes regerados do zero pelo muse: 10/10 verdes, sem edição manual.
+- O teste do invariante 11 usa `openFake(dir, dbPath, "ws-a")` com o mesmo `cwd`
+  para os dois workspaces — é o caso que a auditoria descreveu.
