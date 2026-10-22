@@ -99,6 +99,12 @@ if [ "${1:-}" = "--runtime-info" ]; then
 	exit 0
 fi
 
+if [ "$(id -u)" = "0" ] && [ "${DURABLE_PI_ALLOW_ROOT:-0}" != "1" ]; then
+	echo "não rode o agente como root: o container inteiro herda o privilégio." >&2
+	echo "use um usuário comum ou defina DURABLE_PI_ALLOW_ROOT=1." >&2
+	exit 1
+fi
+
 if ! "$CLI" image inspect "$IMAGE" >/dev/null 2>&1; then
 	echo "imagem $IMAGE ausente; rode: $RUNTIME build -t $IMAGE ." >&2
 	exit 1
@@ -111,9 +117,16 @@ fi
 	"$IMAGE" -R "$(id -u):$(id -g)" /home/agent >/dev/null
 
 args=(--rm --user "$(id -u):$(id -g)")
+# Podman rootless mapeia o usuário para um UID interno: sem keep-id o bind do
+# workspace fica sem permissão de escrita.
+if [ "$RUNTIME" = "podman" ]; then
+	rootless="$("$CLI" info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+	[ "$rootless" = "true" ] && args+=(--userns=keep-id)
+fi
 if [ -t 0 ] && [ -t 1 ]; then args+=(-it); fi
 args+=(-v "$PWD:/workspace" -v "$VOLUME:/home/agent" -w /workspace)
-for name in DURABLE_PI_MODEL ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY GOOGLE_API_KEY; do
+# Só o nome da variável entra na linha de comando; o valor fica no ambiente.
+for name in DURABLE_PI_MODEL ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY GEMINI_API_KEY; do
 	if [ -n "${!name:-}" ]; then args+=(-e "$name"); fi
 done
 
