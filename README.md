@@ -77,8 +77,9 @@ As sessões ficam no volume `durable-pi-home`, em
 
 Três regras de sessão:
 
-- **Um dono por vez.** Um `.lock` ao lado do `.sqlite` recusa o segundo
-  processo; se o dono anterior morreu, o lock é tomado automaticamente.
+- **Um dono por vez.** Um unix socket `<sessão>.sock` ao lado do `.sqlite`
+  recusa o segundo processo; se o dono anterior morreu, o socket recusa
+  conexão e é tomado automaticamente.
 - **Sessão vinculada ao diretório.** Reabrir de outro `cwd` falha, porque o
   alvo das tools mudaria em silêncio.
 - **Modelo vem do config, não da sessão.** A ordem é `--model`, depois
