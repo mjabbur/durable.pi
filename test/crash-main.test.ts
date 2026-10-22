@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm, mkdir } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +33,7 @@ interface Run {
 }
 
 function runChild(
-	mode: "crash" | "resume" | "count",
+	mode: "crash" | "crash-after-tool" | "resume" | "count",
 	sessionDir: string,
 	cwd: string,
 ): Promise<Run> {
@@ -93,9 +99,42 @@ describe("crash no caminho do CLI", () => {
 				expect(bancos).toEqual([`${SESSION}.sqlite`]);
 
 				const counted = await runChild("count", sessionDir, cwd);
-				expect(lastJson<{ userEntries: number }>(counted.stdout)).toEqual({
-					userEntries: 1,
-				});
+				expect(
+					lastJson<{
+						userEntries: number;
+						toolResults: number;
+						toolCalls: number;
+					}>(counted.stdout),
+				).toEqual({ userEntries: 1, toolResults: 0, toolCalls: 0 });
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		"SIGKILL depois do efeito da tool: retomada não repete a chamada",
+		async () => {
+			await withSession(async (sessionDir, cwd) => {
+				const crashed = await runChild("crash-after-tool", sessionDir, cwd);
+				expect(crashed.signal).toBe("SIGKILL");
+				// O `write` já rodou: o efeito está commitado antes do crash.
+				expect(await readFile(join(cwd, "saida.txt"), "utf8")).toBe("uma vez\n");
+
+				const resumed = await runChild("resume", sessionDir, cwd);
+				expect(resumed.code).toBe(0);
+				expect(resumed.stdout).toContain("resposta final");
+
+				// A geração continua do checkpoint: um único par chamada/resultado e
+				// o arquivo não foi escrito de novo.
+				const counted = await runChild("count", sessionDir, cwd);
+				expect(
+					lastJson<{
+						userEntries: number;
+						toolResults: number;
+						toolCalls: number;
+					}>(counted.stdout),
+				).toEqual({ userEntries: 1, toolResults: 1, toolCalls: 1 });
+				expect(await readFile(join(cwd, "saida.txt"), "utf8")).toBe("uma vez\n");
 			});
 		},
 		TIMEOUT,

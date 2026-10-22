@@ -12,6 +12,7 @@ import { ask, closeAgent, openAgent, type AgentSession } from "../agent/harness.
 import {
 	ensureSessionDir,
 	latestSession,
+	listSessions,
 	newSessionId,
 	sessionPath,
 } from "../agent/sessions.js";
@@ -21,7 +22,11 @@ import {
 	UsageError,
 	type SessionOptions,
 } from "./args.js";
-import { runTui } from "../tui/app.js";
+import {
+	runTui,
+	type SessionSwitcher,
+	type SwitchedSession,
+} from "../tui/app.js";
 
 /**
  * Injeção para teste. O catálogo de modelos é a única dependência externa do
@@ -80,21 +85,59 @@ export async function main(
 		const model = parseModelOrUsage(await resolveModelText(options));
 		const id = await resolveSessionId(dir, options);
 		sessionId = id;
-		session = await openAgent(
-			{
-				dbPath: sessionPath(dir, id),
-				cwd: process.cwd(),
-				// Identidade do projeto no host: dentro do container todo repositório
-				// monta em /workspace, então `cwd` não distingue dois projetos.
-				workspace: process.env["DURABLE_PI_WORKSPACE"] ?? process.cwd(),
-				model,
-				...(deps.models === undefined ? {} : { models: deps.models }),
-			},
-			context,
-		);
+
+		const openSession = (nextId: string): Promise<AgentSession> =>
+			openAgent(
+				{
+					dbPath: sessionPath(dir, nextId),
+					cwd: process.cwd(),
+					// Identidade do projeto no host: dentro do container todo repositório
+					// monta em /workspace, então `cwd` não distingue dois projetos.
+					workspace: process.env["DURABLE_PI_WORKSPACE"] ?? process.cwd(),
+					model,
+					...(deps.models === undefined ? {} : { models: deps.models }),
+				},
+				context,
+			);
+
+		/**
+		 * Abre a próxima sessão antes de fechar a anterior: se a abertura falhar,
+		 * a sessão atual continua utilizável. O lock é por arquivo, então os dois
+		 * Harnesss não disputam o mesmo storage.
+		 */
+		const swapSession = async (nextId: string): Promise<SwitchedSession> => {
+			const opened = await openSession(nextId);
+			const previous = session;
+			session = opened;
+			sessionId = nextId;
+			if (previous !== undefined) {
+				await closeAgent(previous, context).catch((error: unknown) => {
+					process.stderr.write(
+						`falha ao fechar a sessão anterior: ${describe(error)}\n`,
+					);
+				});
+			}
+			return { session: opened, id: nextId };
+		};
+
+		session = await openSession(id);
 
 		if (options.mode === "interactive") {
-			code = (await runTui({ session, context })).code;
+			// Sessão efêmera não tem diretório para listar: sem troca de sessão.
+			const switcher: SessionSwitcher | undefined = ephemeral
+				? undefined
+				: {
+						list: () => listSessions(dir),
+						open: swapSession,
+						create: () => swapSession(newSessionId()),
+					};
+			code = (
+				await runTui({
+					session,
+					context,
+					...(switcher === undefined ? {} : { sessions: switcher }),
+				})
+			).code;
 		} else {
 			const outcome = await ask(session, options.prompt, context);
 			if (outcome.status === "done") {

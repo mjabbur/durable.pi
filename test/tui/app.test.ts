@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import { closeAgent, openAgent } from "../../src/agent/harness.js";
+import { listSessions, newSessionId } from "../../src/agent/sessions.js";
 import { runTui } from "../../src/tui/app.js";
 
 const context = BACKGROUND_CONTEXT;
@@ -227,6 +228,145 @@ describe("TUI", () => {
 			terminal.send("\r");
 			await expect(running).resolves.toEqual({ code: 0 });
 		});
+	});
+
+	it("/new cria outra sessão e /resume volta para a primeira", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-switch-"));
+		const open = async (id: string) => {
+			const faux = fauxProvider();
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const model = faux.getModel();
+			const handle = await openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+			faux.setResponses([fauxAssistantMessage(`resposta de ${id}`)]);
+			return handle;
+		};
+
+		let current = await open("s1");
+		let created: string | undefined;
+		const swap = async (id: string) => {
+			const opened = await open(id);
+			const previous = current;
+			current = opened;
+			await closeAgent(previous, context);
+			return { session: opened, id };
+		};
+		const switcher = {
+			list: () => listSessions(dir),
+			open: swap,
+			create: async () => {
+				created = newSessionId();
+				return swap(created);
+			},
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("/new");
+			terminal.send("\r");
+			await waitFor(() => created !== undefined, "sessão criada");
+			await waitFor(
+				() => terminal.text.includes(`sessão ${created ?? ""}`),
+				"aviso da nova sessão",
+			);
+			expect((await readdir(dir)).filter((n) => n.endsWith(".sqlite"))).toHaveLength(2);
+
+			terminal.send("/resume s1");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("sessão s1"), "aviso do resume");
+
+			// O prompt vai para a sessão retomada, não para a recém-criada.
+			terminal.send("olá");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("resposta de s1"),
+				"resposta da sessão s1",
+			);
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(current, context);
+			current = await open(created ?? "");
+			const criada = await current.conversation.context(context);
+			expect(criada.entries).toEqual([]);
+			await closeAgent(current, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("/resume sem argumento abre o seletor e troca no Enter", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-picker-"));
+		const open = async (id: string) => {
+			const faux = fauxProvider();
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const model = faux.getModel();
+			return openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+		};
+
+		const current = await open("antiga");
+		const ranged = await open("nova");
+		await closeAgent(ranged, context);
+		let picked: string | undefined;
+		const switcher = {
+			list: () => listSessions(dir),
+			open: (id: string) => {
+				picked = id;
+				return Promise.resolve({ session: current, id });
+			},
+			create: () => Promise.resolve({ session: current, id: "nova" }),
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("/resume");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("nova"), "seletor aberto");
+			terminal.send("\r");
+			await waitFor(() => picked !== undefined, "sessão escolhida");
+			expect(picked).toBe("nova");
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(current, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("/quit encerra o loop sem chamar o modelo", async () => {

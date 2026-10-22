@@ -4,16 +4,18 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` em `7c1e02b`, 104 testes em 18 arquivos com a TUI, gates verdes
+- `main` com a TUI completa do M1, 116 testes em 20 arquivos, gates verdes
   (`typecheck`, `build`, `lint`, `test`).
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
   persistida). Caminho docker/podman escrito e testado por wrapper falso.
-- M1 em andamento: `durable-pi` sem `-p` abre a TUI (transcript com streaming,
+- M1 fechado: `durable-pi` sem `-p` abre a TUI (transcript com streaming,
   editor, `Ctrl+C` aborta geração ou `!comando`; `/help`, `/usage`, `/compact`,
-  `/model`, `/thinking`, `/quit` e `!comando`). Falta `/new`, `/resume` e o
-  aceite de `kill -9` no container.
+  `/model`, `/thinking`, `/new`, `/resume` com seletor, `/quit` e `!comando`).
+  Aceite de crash coberto por teste de processo: `SIGKILL` depois de o efeito
+  de uma tool estar commitado, retomada com `--session`, um par chamada/resultado
+  e o efeito não repetido.
 - Recuperação e precedência de modelo provadas pelo `main()`; resta só o lock
   entre dois containers reais.
 
@@ -86,20 +88,27 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   (`kind: "durable.shell"`), então o bloco sobrevive ao resume sem entrar no
   contexto do modelo. Comando interrompido não é reexecutado: não há intenção
   durável para ele, só o resultado.
+- Troca de sessão é do `main()`, não da TUI: `runTui` recebe um `SessionSwitcher`
+  (`list`/`open`/`create`) e só pede. A troca abre a sessão nova antes de fechar
+  a anterior — lock é por arquivo, então os dois Harnesss não disputam o mesmo
+  storage — e a TUI para o `watchEvents` antigo antes de reatar no novo, com um
+  contador de attachment para descartar eventos atrasados.
 
-## Próximo: fechar o M1
+## Próximo: M2 — paridade durável
 
-O que já está de pé: TUI com streaming, abort por `Ctrl+C` (segundo sai),
-`/help`, `/usage`, `/compact`, `/model`, `/thinking`, `/quit`, `!comando` e
-erro de uso quando não há TTY.
+O que já está de pé no M1: TUI com streaming, abort por `Ctrl+C` (segundo sai),
+`/help`, `/usage`, `/compact`, `/model`, `/thinking`, `/new`, `/resume`,
+`/quit`, `!comando`, e erro de uso quando não há TTY.
 
-Ordem sugerida:
+Ordem sugerida do M2:
 
-1. `/new` e `/resume`: fechar o Harness atual e abrir outro (a TUI é dona do
-   storage), com `SelectList` sobre `listSessions(dir)`.
-2. Aceite do marco: `kill -9` no container durante uma geração; reabrir com
-   `-c` e conferir transcript sem tool call duplicada, agora com uma tool em
-   voo e efeito já commitado.
+1. `AGENTS.md` do projeto no `/workspace` → `AgentDoc.instructions` (hoje o
+   prompt é só o `DEFAULT_INSTRUCTIONS`).
+2. `--thinking`, `--tools`/`--exclude-tools` e `--name` no CLI; `--fork <id>`
+   com `conversation.fork(at)`.
+3. `--print --mode json`: serialização dos mesmos eventos do `watchEvents`.
+4. Compactação automática com `DEFAULT_COMPACTION_POLICY` e `/retry` para task
+   parkada.
 
 Limite: a TUI é dona do storage (um processo por storage). Quando o servidor
 web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
@@ -135,6 +144,9 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 - `Terminal` do `pi-tui` 1.4.0 tem `drainInput`, `kittyProtocolActive`,
   `setTitle`, `setProgress` e `setProgramStatus` além do que o README mostra;
   terminal falso precisa dos cinco.
+- `main()` interativo só roda com TTY, então o teste de troca de sessão é na
+  TUI, com terminal falso e um `SessionSwitcher` de teste; o caminho
+  `main()`→`swapSession` não tem teste próprio (é cola fina sobre `openAgent`).
 
 ## Bloqueios
 
