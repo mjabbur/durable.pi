@@ -125,7 +125,9 @@ não pode morar em nenhum deles.
 Solução: o durável é a conversa, não o cliente. Um frontend só faz quatro
 coisas: `submit()` (admite), `watch()` (espera o desfecho), assinar
 `watchEvents` (progresso) e ler o transcript. Trocar de frontend é reabrir o
-mesmo SQLite em outro processo.
+mesmo SQLite em outro processo — e **só o mesmo banco conta**: sem `--session`
+ou `-c`, cada execução do CLI cria outro arquivo e não vê a intenção pendente.
+O CLI imprime o id da sessão em toda falha para que a retomada seja acionável.
 
 ```ts
 // cliente A (web) admite com o id que ele guarda
@@ -163,5 +165,9 @@ direto quando consegue o lock. Nunca os dois escrevendo no mesmo arquivo.
 | `IndexedDbStorage` | browser; um dono por vez, com Web Lock |
 | `openDurableObjectSqliteStorage(ctx.storage)` | Cloudflare Durable Object |
 
-Um processo por storage; não há lock entre processos. Para agentes de longa
+Um processo por storage. O `pi-durable` não faz lock entre processos, então o
+`durable-pi` faz: um unix socket `<db>.sock` mantido aberto enquanto o Harness
+está aberto (`src/agent/lock.ts`). `listen()` é atômico no kernel, `connect()`
+responde se há dono vivo, e socket órfão de processo morto é retomado — sem PID,
+sem relógio, sem depender do namespace do container. Para agentes de longa
 duração, SQLite. JSONL só quando o histórico é curto e inspecionável.

@@ -112,21 +112,33 @@ fi
 
 # Idempotente: o wslc falha se o volume já existe.
 "$CLI" volume create "$VOLUME" >/dev/null 2>&1 || true
-# O volume nasce root; alinha com o usuário do host para não gravar arquivos root.
-"$CLI" run --rm --user 0:0 -v "$VOLUME:/home/agent" --entrypoint chown \
-	"$IMAGE" -R "$(id -u):$(id -g)" /home/agent >/dev/null
 
 args=(--rm --user "$(id -u):$(id -g)")
-# Podman rootless mapeia o usuário para um UID interno: sem keep-id o bind do
-# workspace fica sem permissão de escrita.
+rootless=false
 if [ "$RUNTIME" = "podman" ]; then
-	rootless="$("$CLI" info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
-	[ "$rootless" = "true" ] && args+=(--userns=keep-id)
+	info="$("$CLI" info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)"
+	[ "$info" = "true" ] && rootless=true
 fi
+
+if [ "$rootless" = "true" ]; then
+	# Rootless: o volume já pertence ao usuário no host, e keep-id faz o UID
+	# interno casar com o externo. `chown` como root aqui cairia num subuid
+	# diferente do dono, deixando o volume sem permissão para o agente.
+	args+=(--userns=keep-id)
+else
+	# Volume nasce root; alinha com o usuário do host para não gravar como root.
+	"$CLI" run --rm --user 0:0 -v "$VOLUME:/home/agent" --entrypoint chown \
+		"$IMAGE" -R "$(id -u):$(id -g)" /home/agent >/dev/null
+fi
+
+# Identidade do projeto no host: dentro do container todo repositório monta em
+# /workspace, então o agente precisa do caminho real para recusar retomada em
+# outro projeto.
+export DURABLE_PI_WORKSPACE="${DURABLE_PI_WORKSPACE:-$PWD}"
 if [ -t 0 ] && [ -t 1 ]; then args+=(-it); fi
 args+=(-v "$PWD:/workspace" -v "$VOLUME:/home/agent" -w /workspace)
 # Só o nome da variável entra na linha de comando; o valor fica no ambiente.
-for name in DURABLE_PI_MODEL ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY GEMINI_API_KEY; do
+for name in DURABLE_PI_MODEL DURABLE_PI_WORKSPACE ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY GEMINI_API_KEY; do
 	if [ -n "${!name:-}" ]; then args+=(-e "$name"); fi
 done
 

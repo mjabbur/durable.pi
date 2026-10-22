@@ -80,13 +80,17 @@ Três regras de sessão:
 - **Um dono por vez.** Um unix socket `<sessão>.sock` ao lado do `.sqlite`
   recusa o segundo processo; se o dono anterior morreu, o socket recusa
   conexão e é tomado automaticamente.
-- **Sessão vinculada ao diretório.** Reabrir de outro `cwd` falha, porque o
-  alvo das tools mudaria em silêncio.
+- **Sessão vinculada ao projeto.** Reabrir de outro `cwd` ou de outro
+  workspace falha, porque o alvo das tools mudaria em silêncio. No container
+  todo repositório monta em `/workspace`, então o `run.sh` passa o caminho do
+  host em `DURABLE_PI_WORKSPACE` — é ele que distingue dois projetos.
 - **Modelo vem do config, não da sessão.** A ordem é `--model`, depois
   `DURABLE_PI_MODEL`, depois `~/.config/durable-pi/config.json`
   (`{"model": "provider/modelo"}`, sobrescrito por `DURABLE_PI_AGENT_CONFIG`).
   `--model` vale só para a execução; a sessão guarda o último usado, mas ele
   nunca é default.
+- **Recuperação exige a mesma sessão.** Sem `--session`/`-c` cada execução abre
+  outro arquivo. Em falha, o CLI imprime `sessão: <id>` para retomar.
 
 ### WSL
 

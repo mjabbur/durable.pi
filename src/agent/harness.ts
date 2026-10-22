@@ -18,7 +18,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
-import { Control } from "./control.js";
+import { Control, MAX_PENDING, type PendingIntent } from "./control.js";
 import { acquireStorageLock, type StorageLock } from "./lock.js";
 import { createAgentModels } from "./models.js";
 
@@ -35,6 +35,12 @@ export const DEFAULT_INSTRUCTIONS = [
 export type AgentOptions = {
 	readonly dbPath: string;
 	readonly cwd: string;
+	/**
+	 * Identidade do projeto no host. No container dois repositórios diferentes
+	 * montam em `/workspace`, então `cwd` sozinho não distingue as sessões.
+	 * Default: `cwd`.
+	 */
+	readonly workspace?: string;
 	readonly model: ModelRef;
 	readonly instructions?: string;
 	/** Injetável para teste; em produção, o catálogo do pi-ai. */
@@ -75,6 +81,7 @@ export async function openAgent(
 	options: AgentOptions,
 	context: Context,
 ): Promise<AgentSession> {
+	const workspace = options.workspace ?? options.cwd;
 	const lock = await acquireStorageLock(options.dbPath);
 
 	try {
@@ -98,43 +105,81 @@ export async function openAgent(
 			throw error;
 		}
 
-		let conversation: Conversation;
 		try {
-			conversation = await harness.root(context, {
+			const conversation = await harness.root(context, {
 				agent: {
 					model: options.model,
 					instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
 					cwd: options.cwd,
 				},
 			});
+
+			await assertWorkspace(conversation, workspace, options.cwd, context);
+			await applyModel(conversation, options.model, context);
+
+			return { harness, conversation, lock };
 		} catch (error) {
+			// Qualquer passo depois de abrir o Harness pode falhar (incluindo
+			// cancelamento durante `configure()`); sem fechar aqui, o SQLite fica
+			// aberto sem exclusividade e o lock não pode ser tomado.
 			await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
 			throw error;
 		}
-
-		const agent = await conversation.agent(context);
-		if (
-			agent.cwd !== undefined &&
-			resolve(agent.cwd) !== resolve(options.cwd)
-		) {
-			await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
-			throw new Error(
-				`sessão vinculada a ${agent.cwd}; aberta em ${options.cwd}. ` +
-					"Rode do diretório original ou comece outra sessão.",
-			);
-		}
-		if (
-			agent.model === undefined ||
-			agent.model.provider !== options.model.provider ||
-			agent.model.modelId !== options.model.modelId
-		) {
-			await conversation.configure({ model: options.model }, context);
-		}
-
-		return { harness, conversation, lock };
 	} catch (error) {
 		await lock.release().catch(() => undefined);
 		throw error;
+	}
+}
+
+/**
+ * A sessão pertence a um workspace e a um diretório. O primeiro abre com `null`;
+ * os seguintes precisam bater. Comparar só `cwd` não basta no container, onde
+ * todo repositório monta em `/workspace`.
+ */
+async function assertWorkspace(
+	conversation: Conversation,
+	workspace: string,
+	cwd: string,
+	context: Context,
+): Promise<void> {
+	const dono = await conversation.commit(async (tx) => {
+		const control = await tx.doc(Control, conversation.id);
+		if (control.workspace === null) control.workspace = workspace;
+		return control.workspace;
+	}, context);
+
+	if (dono !== workspace) {
+		throw new Error(
+			`sessão vinculada ao workspace ${dono}; aberta em ${workspace}. ` +
+				"Abra pela mesma pasta ou comece outra sessão.",
+		);
+	}
+
+	const agent = await conversation.agent(context);
+	if (agent.cwd !== undefined && resolve(agent.cwd) !== resolve(cwd)) {
+		throw new Error(
+			`sessão vinculada a ${agent.cwd}; aberta em ${cwd}. ` +
+				"Rode do diretório original ou comece outra sessão.",
+		);
+	}
+}
+
+/**
+ * `root(..., { agent })` só aplica o agente na criação. O modelo efetivo da
+ * execução vem do config/flag e precisa ser aplicado aqui quando difere.
+ */
+async function applyModel(
+	conversation: Conversation,
+	model: ModelRef,
+	context: Context,
+): Promise<void> {
+	const agent = await conversation.agent(context);
+	if (
+		agent.model === undefined ||
+		agent.model.provider !== model.provider ||
+		agent.model.modelId !== model.modelId
+	) {
+		await conversation.configure({ model }, context);
 	}
 }
 
@@ -156,20 +201,25 @@ export async function submit(
 ): Promise<Submission> {
 	const { conversation } = session;
 
+	// Fora do commit: o callback é puro e pode rodar mais de uma vez.
+	const candidate = randomUUID();
+
 	const id = await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
 		if (requestId !== undefined) {
-			if (control.pending?.requestId !== requestId) {
-				control.pending = { requestId, prompt };
+			if (!control.pending.some((intent) => intent.requestId === requestId)) {
+				control.pending.push({ requestId, prompt });
+				trimPending(control.pending);
 			}
 			return requestId;
 		}
-		const pending = control.pending;
-		if (pending !== null && pending.prompt === prompt) return pending.requestId;
 
-		const fresh = randomUUID();
-		control.pending = { requestId: fresh, prompt };
-		return fresh;
+		const same = control.pending.find((intent) => intent.prompt === prompt);
+		if (same !== undefined) return same.requestId;
+
+		control.pending.push({ requestId: candidate, prompt });
+		trimPending(control.pending);
+		return candidate;
 	}, context);
 
 	return conversation.submit(
@@ -212,8 +262,10 @@ export async function watch(
 		// escrita na mesma transação lança ReadAfterWrite.
 		const answer = await tx.entry(AssistantEntry, answerId);
 		const control = await tx.doc(Control, conversation.id);
-		if (requestId !== undefined && control.pending?.requestId === requestId) {
-			control.pending = null;
+		if (requestId !== undefined) {
+			control.pending = control.pending.filter(
+				(intent) => intent.requestId !== requestId,
+			);
 		}
 		return answer;
 	}, context);
@@ -256,15 +308,23 @@ async function clearPending(
 	requestId: string | undefined,
 	context: Context,
 ): Promise<void> {
+	if (requestId === undefined) return;
 	await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
-		if (requestId !== undefined && control.pending?.requestId === requestId) {
-			control.pending = null;
-		}
+		control.pending = control.pending.filter(
+			(intent) => intent.requestId !== requestId,
+		);
 	}, context);
 }
 
 /** Texto da resposta final; pensamento e tool calls ficam de fora. */
+/** Mantém as intenções mais recentes; as antigas já não têm como ser reenviadas. */
+function trimPending(pending: PendingIntent[]): void {
+	if (pending.length > MAX_PENDING) {
+		pending.splice(0, pending.length - MAX_PENDING);
+	}
+}
+
 function assistantText(entry: EntryRecord | undefined): string | undefined {
 	const message = entry?.model?.[0];
 	if (message === undefined || message.role !== "assistant") return undefined;

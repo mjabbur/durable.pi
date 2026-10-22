@@ -31,7 +31,11 @@ async function withDir(run: (dir: string, dbPath: string) => Promise<void>) {
 }
 
 /** Harness sobre SQLite real, modelo falso: nenhuma rede no teste. */
-async function openFake(dir: string, dbPath: string) {
+async function openFake(
+	dir: string,
+	dbPath: string,
+	options: { workspace?: string } = {},
+) {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
@@ -40,6 +44,9 @@ async function openFake(dir: string, dbPath: string) {
 		{
 			dbPath,
 			cwd: dir,
+			...(options.workspace === undefined
+				? {}
+				: { workspace: options.workspace }),
 			model: { provider: model.provider, modelId: model.id },
 			models,
 		},
@@ -161,6 +168,56 @@ describe("openAgent", () => {
 
 			expect(segunda.id).toBe(primeira.id);
 			await closeAgent(session, context);
+		});
+	});
+
+	it("vincula a sessão ao workspace do host, não só ao cwd", async () => {
+		await withDir(async (dir, dbPath) => {
+			const primeiro = await openFake(dir, dbPath, { workspace: "C:/repo-a" });
+			await closeAgent(primeiro.session, context);
+
+			// Mesmo cwd (no container, /workspace), projeto diferente no host.
+			await expect(
+				openFake(dir, dbPath, { workspace: "C:/repo-b" }),
+			).rejects.toThrow(/workspace C:\/repo-a/);
+
+			const deNovo = await openFake(dir, dbPath, { workspace: "C:/repo-a" });
+			await closeAgent(deNovo.session, context);
+		});
+	});
+
+	it("preserva a intenção implícita quando outro cliente admite", async () => {
+		await withDir(async (dir, dbPath) => {
+			const first = await openFake(dir, dbPath);
+			first.faux.setResponses([
+				fauxAssistantMessage("a"),
+				fauxAssistantMessage("b"),
+			]);
+			const a = await submit(first.session, "prompt A", context);
+			const b = await submit(first.session, "prompt B", context, "cliente-web-1");
+			// Crash antes de assistir qualquer desfecho: as duas ficam pendentes.
+			await closeAgent(first.session, context);
+
+			const second = await openFake(dir, dbPath);
+			second.faux.setResponses([
+				fauxAssistantMessage("a de novo"),
+				fauxAssistantMessage("b de novo"),
+			]);
+
+			// A intenção implícita de A sobreviveu ao submit explícito de B.
+			const retomada = await submit(second.session, "prompt A", context);
+			expect(retomada.id).toBe(a.id);
+			await watch(second.session, retomada, context);
+
+			const bDeNovo = await submit(second.session, "prompt B", context, "cliente-web-1");
+			expect(bDeNovo.id).toBe(b.id);
+			await watch(second.session, bDeNovo, context);
+
+			const view = await second.session.conversation.context(context);
+			expect(
+				view.entries.filter((entry) => entry.kind === "pi.user"),
+			).toHaveLength(2);
+			await closeAgent(second.session, context);
 		});
 	});
 

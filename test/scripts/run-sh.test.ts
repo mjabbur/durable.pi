@@ -228,8 +228,29 @@ exit 0
 				DURABLE_PI_IMAGE: "img",
 			});
 
-			const agente = (await calls(dir)).at(-1) ?? "";
+			const linhas = await calls(dir);
+			const agente = linhas.at(-1) ?? "";
 			expect(agente).toContain("--userns=keep-id");
+			// Rootless: o volume já é do usuário; chown como root usaria subuid.
+			expect(linhas.some((linha) => linha.includes("--entrypoint chown"))).toBe(
+				false,
+			);
+		});
+	});
+
+	it("passa o workspace do host para o container", async () => {
+		await withDir(async (dir) => {
+			const runtime = await recordingRuntime(dir);
+
+			runScript(dir, {
+				DURABLE_PI_RUNTIME: "docker",
+				DURABLE_PI_DOCKER: runtime,
+				DURABLE_PI_VOLUME: "vol",
+				DURABLE_PI_IMAGE: "img",
+			});
+
+			const agente = (await calls(dir)).at(-1) ?? "";
+			expect(agente).toContain("-e DURABLE_PI_WORKSPACE");
 		});
 	});
 

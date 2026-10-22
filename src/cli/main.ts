@@ -33,6 +33,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 	let dir = options.sessionDir;
 	let ephemeral = false;
 	let session: AgentSession | undefined;
+	let sessionId: string | undefined;
 	let code = 1;
 
 	try {
@@ -45,8 +46,16 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 		const model = parseModel(await resolveModelText(options));
 		const id = await resolveSessionId(dir, options);
+		sessionId = id;
 		session = await openAgent(
-			{ dbPath: sessionPath(dir, id), cwd: process.cwd(), model },
+			{
+				dbPath: sessionPath(dir, id),
+				cwd: process.cwd(),
+				// Identidade do projeto no host: dentro do container todo repositório
+				// monta em /workspace, então `cwd` não distingue dois projetos.
+				workspace: process.env["DURABLE_PI_WORKSPACE"] ?? process.cwd(),
+				model,
+			},
 			context,
 		);
 
@@ -56,11 +65,13 @@ export async function main(argv: readonly string[]): Promise<number> {
 			code = 0;
 		} else {
 			process.stderr.write(`sem resposta: ${outcome.reason ?? "unanswered"}\n`);
+			writeResumeHint(sessionId);
 			code = 1;
 		}
 	} catch (error) {
 		if (error instanceof UsageError) return usageFailure(error);
 		process.stderr.write(`${describe(error)}\n`);
+		writeResumeHint(sessionId);
 		code = 1;
 	} finally {
 		// Limpeza não pode esconder o erro principal nem trocar um sucesso por falha
@@ -84,6 +95,17 @@ export async function main(argv: readonly string[]): Promise<number> {
 	}
 
 	return code;
+}
+
+/**
+ * Recuperação exige reabrir a mesma sessão: sem `--session`/`-c` a próxima
+ * execução cria outro arquivo e não vê a intenção pendente.
+ */
+function writeResumeHint(sessionId: string | undefined): void {
+	if (sessionId === undefined) return;
+	process.stderr.write(
+		`sessão: ${sessionId} — retome com durable-pi --session ${sessionId} ...\n`,
+	);
 }
 
 function usageFailure(error: unknown): number {
