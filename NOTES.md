@@ -41,3 +41,17 @@ foi verificado. Não guarde aqui o que já está em `docs/DURABILITY.md`.
 - [x] teste de crash real com `SIGKILL` (`test/crash.test.ts`)
 - [x] idempotência para provedor sem API de consulta (`src/charge.ts`, intenção + chave)
 - [ ] crash em processo filho exercitando `chargeOnce` (hoje o crash usa uma task do fixture)
+
+## Testes do handoff (gerados pelo muse)
+
+- `specs/handoff/spec.md` descreve o contrato de `submit`/`watch`/`ask`; o teste
+  `test/agent/handoff.muse.test.ts` foi escrito por
+  `opencode-go/muse-spark-1.3-contributor` (thinking low) em cópia isolada do
+  repo, sem editar `src/`.
+- Duas falhas na primeira rodada eram **defeito da spec**, não do código:
+  - invariante 4 exigia duas entradas `pi.user` adjacentes; a fila coloca a
+    resposta entre elas. Corrigido para contagem, sem ordem.
+  - invariante 9 reusava o handle de `Submission` depois de `closeAgent()`; o
+    handle morre com o Harness (`Session is closed`). Corrigido: handoff é por
+    `requestId`, handle não atravessa processo.
+- Segunda rodada: 10/10 verdes, sem edição manual do teste gerado.
