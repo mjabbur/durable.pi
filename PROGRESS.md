@@ -22,6 +22,18 @@ M0 concluído: `src/agent/` (Harness + `CodingTools`), CLI `-p` com sessão em
 SQLite, `Dockerfile` e `scripts/run.sh`. M1 é a TUI sobre `pi-tui`.
 `src/index.ts` e mapa `exports` só quando o projeto virar biblioteca.
 
+## Auditoria do M0
+
+Relatório em `docs/audits/2026-10-22-m0.md`. Corrigidos até aqui:
+
+- CLI: erro de preparação/limpeza contido em `main()`, id inválido vira código
+  2, flag sem valor não consome a opção seguinte, `listSessions` distingue
+  ausência de erro e considera o WAL.
+- Núcleo: lock exclusivo por storage, `cwd` gravado e conferido na reabertura,
+  `--model` aplicado via `configure()` em sessão existente, `requestId`
+  reaproveitado de intenção commitada (reenvio após crash não duplica input),
+  bootstrap fecha storage/Harness quando um passo falha.
+
 ## Pendências
 
 - **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial

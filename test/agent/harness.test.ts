@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,6 +80,50 @@ describe("openAgent", () => {
 			expect(after.entries.length).toBe(before.entries.length);
 			expect(after.messages.length).toBeGreaterThan(0);
 			await closeAgent(second.session, context);
+		});
+	});
+
+	it("recusa reabrir a sessão de outro diretório", async () => {
+		await withDir(async (dir, dbPath) => {
+			const first = await openFake(dir, dbPath);
+			first.faux.setResponses([fauxAssistantMessage("ok")]);
+			await ask(first.session, "oi", context);
+			await closeAgent(first.session, context);
+
+			const outro = join(dir, "outro");
+			await mkdir(outro, { recursive: true });
+			await expect(openFake(outro, dbPath)).rejects.toThrow(/vinculada a/);
+		});
+	});
+
+	it("aplica o modelo pedido numa sessão existente e persiste", async () => {
+		await withDir(async (dir, dbPath) => {
+			const primeiro = await openFake(dir, dbPath);
+			primeiro.faux.setResponses([fauxAssistantMessage("ok")]);
+			await ask(primeiro.session, "oi", context);
+			await closeAgent(primeiro.session, context);
+
+			const segundo = fauxProvider({ provider: "faux-b" });
+			const modelo = segundo.getModel();
+			const models = createModels();
+			models.setProvider(segundo.provider);
+			const modelRef = { provider: modelo.provider, modelId: modelo.id };
+
+			const reaberta = await openAgent(
+				{ dbPath, cwd: dir, model: modelRef, models },
+				context,
+			);
+			const agente = await reaberta.conversation.agent(context);
+
+			expect(agente.model).toEqual(modelRef);
+			await closeAgent(reaberta, context);
+
+			const deNovo = await openAgent(
+				{ dbPath, cwd: dir, model: modelRef, models },
+				context,
+			);
+			expect((await deNovo.conversation.agent(context)).model).toEqual(modelRef);
+			await closeAgent(deNovo, context);
 		});
 	});
 
