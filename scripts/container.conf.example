@@ -1,0 +1,16 @@
+# Configuração do scripts/run.sh. Copie para ~/.config/durable-pi/container.conf
+# (ou aponte DURABLE_PI_CONFIG para outro caminho).
+#
+# Variáveis de ambiente têm precedência sobre este arquivo.
+# Caminhos vazios caem para o PATH do sistema.
+
+# podman, wslc ou docker; vazio = auto (podman, depois wslc, depois docker)
+DURABLE_PI_RUNTIME=auto
+
+# DURABLE_PI_PODMAN=/usr/bin/podman
+# No WSL o wslc é um binário do Windows, fora do PATH do Linux:
+# DURABLE_PI_WSLC="/mnt/c/Program Files/WSL/wslc.exe"
+# DURABLE_PI_DOCKER=/usr/bin/docker
+
+# DURABLE_PI_IMAGE=durable-pi:dev
+# DURABLE_PI_VOLUME=durable-pi-home
