@@ -77,9 +77,9 @@ As sessões ficam no volume `durable-pi-home`, em
 
 Três regras de sessão:
 
-- **Um dono por vez.** Um unix socket `<sessão>.sock` ao lado do `.sqlite`
-  recusa o segundo processo; se o dono anterior morreu, o socket recusa
-  conexão e é tomado automaticamente.
+- **Um dono por vez.** Um SQLite `<sessão>.lock` guarda uma transação
+  exclusiva enquanto o agente está aberto; o segundo processo recebe "em uso".
+  Se o dono morreu, o kernel libera o lock e a próxima execução abre normalmente.
 - **Sessão vinculada ao projeto.** Reabrir de outro `cwd` ou de outro
   workspace falha, porque o alvo das tools mudaria em silêncio. No container
   todo repositório monta em `/workspace`, então o `run.sh` passa o caminho do

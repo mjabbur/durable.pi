@@ -1,7 +1,4 @@
-import { rm } from "node:fs/promises";
-import { connect, createServer, type Server } from "node:net";
-
-import { isErrno } from "./fs-errors.js";
+import { DatabaseSync } from "node:sqlite";
 
 export type StorageLock = {
 	readonly path: string;
@@ -11,69 +8,59 @@ export type StorageLock = {
 /**
  * Lock exclusivo por arquivo de storage.
  *
- * `pi-durable` exige um dono por banco e o SQLite não impede dois processos de
- * abrirem o mesmo arquivo. Arquivo com PID não serve: o diretório pode estar
- * montado em outro container, onde o mesmo PID existe, e existe uma janela
- * entre criar o arquivo e escrever o dono.
+ * `pi-durable` exige um dono por banco. Evitar isso com arquivo/PID não é
+ * confiável: existe janela entre criar e escrever, e PID não identifica dono
+ * entre containers. Socket unix também não fecha: remover o socket de um dono
+ * morto pode apagar o socket de um dono novo (race entre `unlink` e `listen`).
  *
- * A exclusão é um unix socket em `<db>.sock`: `listen()` é atômico no kernel e
- * `connect()` responde se há dono vivo. Socket órfão de processo morto recusa
- * conexão, então é descartado e reusado — sem PID, sem relógio, sem namespace.
+ * Aqui a exclusão é uma transação `BEGIN EXCLUSIVE` num SQLite separado
+ * (`<db>.lock`), mantida aberta enquanto o Harness está aberto. O lock é do
+ * kernel, liberado automaticamente quando o processo morre — sem PID, sem
+ * relógio, sem arquivo órfão para detectar.
  */
+// API assíncrona de propósito: a chamada é síncrona, mas o contrato do lock é
+// `Promise` para quem abre storage (que é assíncrono).
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function acquireStorageLock(dbPath: string): Promise<StorageLock> {
-	const path = `${dbPath}.sock`;
+	const path = `${dbPath}.lock`;
+	const db = new DatabaseSync(path);
 
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		if (await isHeld(path)) {
+	try {
+		// Sem espera: quem não consegue o lock precisa falhar agora, não travar.
+		db.exec("PRAGMA busy_timeout = 0");
+		db.exec("BEGIN EXCLUSIVE");
+		// Uma escrita garante a exclusividade mesmo se o journal for WAL.
+		db.exec("CREATE TABLE IF NOT EXISTS owner (id INTEGER)");
+		db.exec("DELETE FROM owner");
+	} catch (error) {
+		db.close();
+		if (isBusy(error)) {
 			throw new Error(
 				`sessão em uso por outro processo (${path}); feche-o antes de abrir de novo`,
 			);
 		}
-
-		// Socket de dono morto: ninguém aceita conexão, pode ser removido.
-		await rm(path, { force: true });
-		try {
-			const server = await listen(path);
-			return { path, release: () => release(server, path) };
-		} catch (error) {
-			// Outro processo venceu a corrida entre o `rm` e o `listen`.
-			if (!isErrno(error, "EADDRINUSE")) throw error;
-		}
+		throw error;
 	}
 
-	throw new Error(`não foi possível obter o lock de ${dbPath}`);
+	return {
+		path,
+		// eslint-disable-next-line @typescript-eslint/require-await
+		release: async () => {
+			try {
+				db.exec("ROLLBACK");
+			} finally {
+				db.close();
+			}
+		},
+	};
 }
 
-/** Há dono vivo? `connect()` só completa se alguém está escutando no socket. */
-function isHeld(path: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const socket = connect(path);
-		const finish = (held: boolean) => {
-			socket.destroy();
-			resolve(held);
-		};
-		socket.once("connect", () => finish(true));
-		socket.once("error", () => finish(false));
-	});
-}
-
-function listen(path: string): Promise<Server> {
-	return new Promise((resolve, reject) => {
-		const server = createServer((socket) => socket.destroy());
-		// O socket não pode manter o processo vivo; o Harness é o dono do ciclo.
-		server.unref();
-		server.once("error", reject);
-		server.listen(path, () => {
-			server.removeListener("error", reject);
-			server.on("error", () => undefined);
-			resolve(server);
-		});
-	});
-}
-
-async function release(server: Server, path: string): Promise<void> {
-	await new Promise<void>((resolve) => {
-		server.close(() => resolve());
-	});
-	await rm(path, { force: true });
+/** SQLite sinaliza concorrência com `SQLITE_BUSY` (5). */
+function isBusy(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"errcode" in error &&
+		error.errcode === 5
+	);
 }
