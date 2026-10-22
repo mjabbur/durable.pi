@@ -137,9 +137,21 @@ fi
 export DURABLE_PI_WORKSPACE="${DURABLE_PI_WORKSPACE:-$PWD}"
 if [ -t 0 ] && [ -t 1 ]; then args+=(-it); fi
 args+=(-v "$PWD:/workspace" -v "$VOLUME:/home/agent" -w /workspace)
-# Só o nome da variável entra na linha de comando; o valor fica no ambiente.
+
+# Env por arquivo, não por `-e NAME`: o wslc ignora `-e` sem valor (a variável
+# não chega ao container) e `-e NAME=VALUE` colocaria segredo na linha de
+# comando. `--env-file` funciona nos três runtimes.
+if [ -n "${DURABLE_PI_ENV_FILE:-}" ]; then
+	ENV_FILE="$DURABLE_PI_ENV_FILE"
+	: > "$ENV_FILE"
+else
+	# `mktemp` já cria 0600: o arquivo carrega segredos.
+	ENV_FILE="$(mktemp "${TMPDIR:-/tmp}/durable-pi-env.XXXXXX")"
+	trap 'rm -f "$ENV_FILE"' EXIT
+fi
 for name in DURABLE_PI_MODEL DURABLE_PI_WORKSPACE ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY OPENCODE_API_KEY GEMINI_API_KEY; do
-	if [ -n "${!name:-}" ]; then args+=(-e "$name"); fi
+	if [ -n "${!name:-}" ]; then printf '%s=%s\n' "$name" "${!name}" >> "$ENV_FILE"; fi
 done
+[ -s "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
 
 exec "$CLI" run "${args[@]}" "$IMAGE" "$@"
