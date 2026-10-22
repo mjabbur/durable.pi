@@ -4,13 +4,18 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` em `8140a0e`, 99 testes em 17 arquivos, gates verdes
+- `main` em `7c1e02b`, 104 testes em 18 arquivos com a TUI, gates verdes
   (`typecheck`, `build`, `lint`, `test`).
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
   persistida). Caminho docker/podman escrito e testado por wrapper falso.
-- TUI ainda não existe: é o M1.
+- M1 em andamento: `durable-pi` sem `-p` abre a TUI (transcript com streaming,
+  editor, `Ctrl+C` aborta; comandos `/help`, `/usage`, `/compact`, `/quit`).
+  Falta `!comando`, `/new`, `/resume`, `/model`, `/thinking` e o aceite de
+  `kill -9` no container.
+- Recuperação e precedência de modelo provadas pelo `main()`; resta só o lock
+  entre dois containers reais.
 
 ## Estrutura
 
@@ -21,10 +26,12 @@ src/agent/    harness.ts (openAgent, submit, watch, ask, closeAgent),
               config.ts (modelo padrão), models.ts (catálogo pi-ai),
               sessions.ts (ids, listagem, WAL), fs-errors.ts
 src/cli/      args.ts (parse puro), main.ts (ciclo de vida, códigos de saída)
+src/tui/      transcript.ts (reducer puro de AgentEvent), app.ts (TUI),
+              theme.ts (temas neutros)
 bin/          durable-pi.mjs
 scripts/      run.sh (container), bakeoff.sh, container.conf.example
 test/         invariants, crash (fixture, charge, agent, main), agent/*,
-              cli/*, scripts/*, spec/, agent/handoff.muse.test.ts (gerado)
+              cli/*, tui/*, scripts/*, spec/, agent/handoff.muse.test.ts (gerado)
 specs/        counter, charge, handoff
 docs/         DURABILITY, PI-CODE-MAP, ROADMAP, RUNBOOK, audits/
 ```
@@ -41,7 +48,6 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
 
 `npm test` roda `pretest` (build), porque `test/crash-agent.test.ts` executa
 `dist/`.
-
 ## Decisões que não devem ser reabertas sem motivo
 
 - Node 24, ESM, sem Bun. `pi-durable` 1.4.0 fixo; API conferida em
@@ -66,16 +72,27 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
 - Testes de contrato são gerados por `muse-spark-1.3-contributor` com
   `--thinking low`, a partir de `specs/<slug>/spec.md`; spec ambígua vira teste
   errado (aconteceu duas vezes no handoff).
+- A TUI desenha a partir de `watchEvents`, com um reducer puro
+  (`src/tui/transcript.ts`) entre o evento e o componente. O estado inicial é o
+  snapshot: transcript comprometido mais mensagem em voo, então reabrir no meio
+  da geração mostra o parcial. `AssistantEntry`/`ToolResultEntry` finalizam o
+  que o evento de execução já mostrou — a dedupe é por id de entrada.
+- `Terminal` é injetável na TUI: `test/tui/app.test.ts` dirige a interface
+  inteira com terminal falso, sem TTY. Não troque isso por `VirtualTerminal`
+  (dependência nova) sem motivo.
 
-## Próximo: M1 — TUI sobre `pi-tui`
+## Próximo: fechar o M1
+
+O que já está de pé: TUI com streaming, abort por `Ctrl+C` (segundo sai),
+`/help`, `/usage`, `/compact`, `/quit`, e erro de uso quando não há TTY.
 
 Ordem sugerida:
 
-1. `src/tui/` com `ProcessTerminal` + `Editor` + `Markdown`/`ScrollView`;
-   streaming por `watchEvents` sobre `harness`, não por polling de estado.
-2. `Ctrl+C` = `submission.abort(context)`; segundo `Ctrl+C` sai.
-3. Comandos: `/new`, `/resume`, `/model`, `/thinking`, `/usage`, `/compact`.
-4. Enquanto não houver chave de API, provar a TUI com `fauxProvider`.
+1. `!comando`: executa bash direto, fora do modelo, com saída no transcript.
+2. `/new` e `/resume`: fechar o Harness atual e abrir outro (a TUI é dona do
+   storage). `/model` e `/thinking` via `conversation.configure()`.
+3. Aceite do marco: `kill -9` no container durante uma geração; reabrir com
+   `-c` e conferir transcript sem tool call duplicada.
 
 Limite: a TUI é dona do storage (um processo por storage). Quando o servidor
 web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
@@ -105,6 +122,12 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
   (EntryId) e a resposta se lê com `tx.entry(AssistantEntry, ...)`.
 - Ferramenta de teste falsa exige `stopReason: "toolUse"` para executar tool;
   `stopReason: "error"` vira `reason: model_error`.
+- O provedor faux entrega a mensagem inteira: não sai `message_update` com
+  `text_delta` (só `message_start` e `message_end`). O caminho de streaming do
+  reducer é coberto com eventos montados à mão, e o resto com eventos reais.
+- `Terminal` do `pi-tui` 1.4.0 tem `drainInput`, `kittyProtocolActive`,
+  `setTitle`, `setProgress` e `setProgramStatus` além do que o README mostra;
+  terminal falso precisa dos cinco.
 
 ## Bloqueios
 
