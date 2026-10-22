@@ -1,108 +1,103 @@
 # PROGRESS
 
+Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
+
 ## Estado
 
-- Gates verdes: typecheck, lint, build e 36 testes (3 invariante, 8 counter,
-  9 charge, 4 crash de fixture, 3 crash de `chargeOnce`, 3 do núcleo do
-  agente, 6 do CLI).
-- `src/counter.ts` e `src/charge.ts` implementados contra as specs.
-- Bake-off fechado: `muse-spark-1.3-contributor`, `--thinking low`, medida por
-  artefato.
-- Repositório inicializado; nenhuma API pública exportada ainda.
+- `main` em `8140a0e` (+ este PR), 95 testes em 16 arquivos, gates verdes
+  (`typecheck`, `build`, `lint`, `test`).
+- CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
+  `-c`, `--no-session`, config de modelo, lock, workspace do host.
+- Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
+  persistida). Caminho docker/podman escrito e testado por wrapper falso.
+- TUI ainda não existe: é o M1.
 
-## Decisões
+## Estrutura
 
-Ver tabela em `NOTES.md`. Em resumo: Node 24, sem Bun; pi-durable fixado em
-1.4.0; testes derivados da spec por agente separado; `low` como nível de
-raciocínio.
+```
+src/agent/    harness.ts (openAgent, submit, watch, ask, closeAgent),
+              control.ts (app.control v2: workspace + intenções),
+              lock.ts (BEGIN EXCLUSIVE em <db>.lock),
+              config.ts (modelo padrão), models.ts (catálogo pi-ai),
+              sessions.ts (ids, listagem, WAL), fs-errors.ts
+src/cli/      args.ts (parse puro), main.ts (ciclo de vida, códigos de saída)
+bin/          durable-pi.mjs
+scripts/      run.sh (container), bakeoff.sh, container.conf.example
+test/         invariants, crash (fixture, charge, agent), agent/*, cli/*,
+              scripts/*, spec/, agent/handoff.muse.test.ts (gerado)
+specs/        counter, charge, handoff
+docs/         DURABILITY, PI-CODE-MAP, ROADMAP, RUNBOOK, audits/
+```
 
-## Próximos passos
+## Comandos
 
-M0 concluído: `src/agent/` (Harness + `CodingTools`), CLI `-p` com sessão em
-SQLite, `Dockerfile` e `scripts/run.sh`. M1 é a TUI sobre `pi-tui`.
-`src/index.ts` e mapa `exports` só quando o projeto virar biblioteca.
+```bash
+npm run typecheck && npm run lint && npm run test   # pronto = três verdes
+npm run build                                       # tsc -p tsconfig.build.json
+scripts/run.sh -p "..." --model provider/modelo     # container
+scripts/run.sh --runtime-info                       # detecta runtime sem executar
+"$WSL" build -t durable-pi:dev .                    # rebuild após mudar src/
+```
 
-## Auditoria do M0
+`npm test` roda `pretest` (build), porque `test/crash-agent.test.ts` executa
+`dist/`.
 
-Relatório em `docs/audits/2026-10-22-m0.md`. Corrigidos até aqui:
+## Decisões que não devem ser reabertas sem motivo
 
-- CLI: erro de preparação/limpeza contido em `main()`, id inválido vira código
-  2, flag sem valor não consome a opção seguinte, `listSessions` distingue
-  ausência de erro e considera o WAL.
-- Núcleo: lock exclusivo por storage, `cwd` gravado e conferido na reabertura,
-  `--model` aplicado via `configure()` em sessão existente, `requestId`
-  reaproveitado de intenção commitada (reenvio após crash não duplica input),
-  bootstrap fecha storage/Harness quando um passo falha.
-- Container: `GEMINI_API_KEY` encaminhada, `--userns=keep-id` no podman
-  rootless, recusa de root, teste da execução real do wrapper.
-- Teste de crash pelo caminho do agente (`test/crash-agent.test.ts`): SIGKILL
-  dentro da geração, mesmo prompt repetido, uma única entrada `pi.user`.
-- Auditoria do M0 considerada fechada; itens em aberto passam ao M1.
+- Node 24, ESM, sem Bun. `pi-durable` 1.4.0 fixo; API conferida em
+  `node_modules/@earendil-works/pi-durable/dist/*.d.ts`.
+- Um processo por storage; o lock é um SQLite auxiliar com `BEGIN EXCLUSIVE`
+  (arquivo `PID` e unix socket foram descartados: janela e corrida de `unlink`).
+- Modelo padrão vem de `~/.config/durable-pi/config.json`
+  (`DURABLE_PI_AGENT_CONFIG`), ordem `--model` → `DURABLE_PI_MODEL` → config.
+  `--model` não é pegajoso.
+- Sessão vinculada ao workspace do host (`DURABLE_PI_WORKSPACE`, enviado pelo
+  `run.sh`), não só ao `cwd` — dentro do container todo repo é `/workspace`.
+- Env entra por `--env-file` (0600, temporário). `wslc -e NAME` sem valor não
+  repassa nada.
+- Recuperação exige a mesma sessão: sem `--session`/`-c` o CLI cria outro
+  banco. Em falha ele imprime `sessão: <id>`.
+- `submit()` admite, `watch()` espera e lê, `ask()` é açúcar. Handoff entre
+  frontends é por `requestId`; handle de `Submission` não atravessa processo.
+- Testes de contrato são gerados por `muse-spark-1.3-contributor` com
+  `--thinking low`, a partir de `specs/<slug>/spec.md`; spec ambígua vira teste
+  errado (aconteceu duas vezes no handoff).
 
-## Config do agente
+## Próximo: M1 — TUI sobre `pi-tui`
 
-`~/.config/durable-pi/config.json` (ou `$XDG_CONFIG_HOME/...`, ou
-`DURABLE_PI_AGENT_CONFIG`) define o modelo padrão: `{"model": "provider/modelo"}`.
-Ordem de resolução: `--model` → `DURABLE_PI_MODEL` → config → erro de uso.
-`--model` não é pegajoso: o modelo gravado na sessão é o último aplicado, nunca
-o default da próxima execução. Exemplo em `docs/agent-config.example.json`.
+Ordem sugerida:
 
-## Auditoria do M1.0
+1. `src/tui/` com `ProcessTerminal` + `Editor` + `Markdown`/`ScrollView`;
+   streaming por `watchEvents` sobre `harness`, não por polling de estado.
+2. `Ctrl+C` = `submission.abort(context)`; segundo `Ctrl+C` sai.
+3. Comandos: `/new`, `/resume`, `/model`, `/thinking`, `/usage`, `/compact`.
+4. Enquanto não houver chave de API, provar a TUI com `fauxProvider`.
 
-`docs/audits/2026-10-22-m1-0.md` (gpt-6.1-sol, thinking high). Dez achados
-confirmados, nenhum refutado. Ordem de correção escolhida:
-
-1. Recuperação só vale no mesmo banco: CLI sem `--session`/`-c` cria id novo.
-2. Lock com corrida na janela `open(wx)`→`writeFile` e PID que não identifica
-   dono entre containers (`EPERM` lido como morte).
-3. `cwd` interno (`/workspace`) não distingue dois projetos no container.
-4. Janela entre limpar a intenção e imprimir a resposta.
-5. Uma intenção implícita só; `randomUUID()` dentro do callback de commit;
-   bootstrap não fecha o Harness em falha de `agent()`/`configure()`.
-6. Invariante 1 da spec do handoff confunde admissão com colocação (`queued`).
-7. Helper de `chown` do run.sh sem `keep-id` no podman rootless.
-
-## Fechamento do M1.0
-
-Corrigido depois da auditoria (`docs/audits/2026-10-22-m1-0.md`):
-
-- lock por unix socket (`<db>.sock`), sem PID e imune a namespace;
-- identidade de workspace no host (`DURABLE_PI_WORKSPACE`), com recusa de
-  retomada em outro projeto mesmo com `cwd` igual;
-- `--env-file` no lugar de `-e NAME`: o wslc ignorava `-e` sem valor, então
-  nenhuma variável chegava ao container (nem chave de API, nem workspace);
-- `app.control` v2 com lista de intenções (teto 8) e `migrate` da v1;
-- `randomUUID()` fora do commit, bootstrap fechando o Harness em qualquer
-  falha, `chown` fora do caminho podman rootless;
-- CLI imprime `sessão: <id>` em falha: recuperação exige `--session`/`-c`;
-- spec do handoff corrigida (admissão ≠ colocação; handle morre com o
-  Harness) e testes do muse regerados.
+Limite: a TUI é dona do storage (um processo por storage). Quando o servidor
+web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 
 ## Pendências
 
-- **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial
-  de `git` dentro do container; o agente commita e o push é feito no host.
-  Quando push automático for requisito, o caminho é um proxy de credencial no
-  host via socket, para o token nunca entrar no container.
+- Push a partir do container (M3): sem credencial dentro; push no host.
+- Gate de `test/spec/` no CI: decidir como distinguir correção de spec de teste
+  acomodado (duas perguntas antigas continuam válidas).
+- Tailscale no M3: decidir onde roda (Windows publicando porta do `wslc -p` vs
+  `tailscale serve` dentro do WSL).
+- Sobras da auditoria do M1.0: crash pelo `main()` (hoje é pelo `openAgent`),
+  prova de precedência `--model` vs `DURABLE_PI_MODEL`, e lock entre dois
+  containers reais.
 
-- **Gate de `test/spec/` no CI** (adiado por decisão, 2026-10-22). O objetivo é
-  falhar o PR quando um arquivo de `test/spec/` muda no mesmo diff da
-  implementação, para que o teste de contrato não seja ajustado ao código.
-  Antes de implementar, resolver: como distinguir correção legítima de spec
-  (spec atualizada + teste regenerado) de teste acomodado; e se o gate compara
-  diff do PR ou exige que `test/spec/` venha em commit separado.
+## Armadilhas conhecidas
 
-## Feito
-
-- Repositório público, CI em PR, ruleset em `main` (PR obrigatório, `gates`
-  exigido) e secret scanning com push protection.
-- `AGENTS.md` com o modelo de teste e a regra do overlay de `tx.doc()`.
-- `test/crash-charge.test.ts`: `SIGKILL` dentro do provedor de `chargeOnce`;
-  regerar a chave no resume quebra 2 dos 3 casos.
-- M0 em `main`: núcleo do agente, CLI `-p`, build e imagem.
-- Imagem validada no WSL com `wslc` 3.0.3.0: build, volume nomeado, bind do
-  `cwd` e sessão SQLite persistida no volume. O caminho Docker usa o mesmo
-  `scripts/run.sh` e não foi exercitado aqui.
+- Depois de mudar `src/`, a imagem precisa de rebuild; `scripts/run.sh` não
+  rebuilda.
+- No WSL: sem docker e sem podman; `wslc` é binário Windows fora do PATH.
+- `test/scripts/run-sh.test.ts` roda com `PATH` mínimo: `mktemp` não existe,
+  então o teste fixa `DURABLE_PI_ENV_FILE`.
+- `ConversationId` é `number` com brand; `AskOutcome` usa `settled.answer`
+  (EntryId) e a resposta se lê com `tx.entry(AssistantEntry, ...)`.
+- Ferramenta de teste falsa exige `stopReason: "toolUse"` para executar tool;
+  `stopReason: "error"` vira `reason: model_error`.
 
 ## Bloqueios
 
