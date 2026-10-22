@@ -74,6 +74,15 @@ As sessões ficam no volume `durable-pi-home`, em
 `/home/agent/.local/share/durable-pi/sessions/<id>.sqlite`. O `cwd` entra em
 `/workspace`; o agente só vê o que estiver montado.
 
+Três regras de sessão:
+
+- **Um dono por vez.** Um `.lock` ao lado do `.sqlite` recusa o segundo
+  processo; se o dono anterior morreu, o lock é tomado automaticamente.
+- **Sessão vinculada ao diretório.** Reabrir de outro `cwd` falha, porque o
+  alvo das tools mudaria em silêncio.
+- **`--model` é persistido.** Numa sessão existente o modelo pedido é aplicado
+  via `configure()` e gravado; a próxima execução usa o novo.
+
 ### WSL
 
 No WSL o runtime é o `wslc` (WSL containers, WSL ≥ 2.9.3), não há Docker no

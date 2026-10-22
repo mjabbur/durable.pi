@@ -3,6 +3,8 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { isErrno } from "./fs-errors.js";
+
 export type SessionInfo = {
 	readonly id: string;
 	readonly path: string;
@@ -89,11 +91,3 @@ export function assertSessionId(id: string): void {
 	if (!ID_PATTERN.test(id)) throw new InvalidSessionIdError(id);
 }
 
-function isErrno(error: unknown, code: string): boolean {
-	return (
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		error.code === code
-	);
-}
