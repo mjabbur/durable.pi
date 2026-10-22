@@ -11,6 +11,7 @@ import {
 	type Conversation,
 	type EntryRecord,
 	type ModelRef,
+	type Submission,
 	type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -138,36 +139,54 @@ export async function openAgent(
 }
 
 /**
- * Submete o prompt e espera o desfecho.
+ * Admite o prompt e devolve a submissão, sem esperar resposta.
  *
- * A intenção (`requestId` + prompt) é commitada antes de submeter. Se o processo
- * morrer depois de admitir e antes de receber a resposta, a próxima execução do
- * mesmo prompt reenvia o mesmo `requestId`, e o pi-durable devolve a submissão
- * existente em vez de admitir um segundo input.
+ * A intenção (`requestId` + prompt) é commitada antes de submeter. Sem
+ * `requestId` explícito, um prompt idêntico ao pendente reaproveita o id, para
+ * que a reexecução do mesmo comando depois de um crash devolva a submissão
+ * existente em vez de admitir um segundo input. Um cliente de vida longa (TUI,
+ * servidor web) passa o `requestId` que ele mesmo guarda: assim dois prompts
+ * iguais de clientes diferentes não colapsam num só.
  */
-export async function ask(
+export async function submit(
 	session: AgentSession,
 	prompt: string,
 	context: Context,
-): Promise<AskOutcome> {
+	requestId?: string,
+): Promise<Submission> {
 	const { conversation } = session;
 
-	const requestId = await conversation.commit(async (tx) => {
+	const id = await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
-		const pending = control.pending;
-		if (pending !== null && pending.prompt === prompt) {
-			return pending.requestId;
+		if (requestId !== undefined) {
+			if (control.pending?.requestId !== requestId) {
+				control.pending = { requestId, prompt };
+			}
+			return requestId;
 		}
+		const pending = control.pending;
+		if (pending !== null && pending.prompt === prompt) return pending.requestId;
+
 		const fresh = randomUUID();
 		control.pending = { requestId: fresh, prompt };
 		return fresh;
 	}, context);
 
-	const submission = await conversation.submit(
-		{ type: "input", content: prompt, requestId },
+	return conversation.submit(
+		{ type: "input", content: prompt, requestId: id },
 		context,
 	);
+}
+
+/** Espera o desfecho da submissão, lê a resposta e limpa a intenção pendente. */
+export async function watch(
+	session: AgentSession,
+	submission: Submission,
+	context: Context,
+): Promise<AskOutcome> {
+	const { conversation } = session;
 	const settled = await submission.wait(context);
+	const requestId = settled.requestId;
 
 	if (settled.status !== "done") {
 		await clearPending(conversation, requestId, context);
@@ -193,7 +212,9 @@ export async function ask(
 		// escrita na mesma transação lança ReadAfterWrite.
 		const answer = await tx.entry(AssistantEntry, answerId);
 		const control = await tx.doc(Control, conversation.id);
-		if (control.pending?.requestId === requestId) control.pending = null;
+		if (requestId !== undefined && control.pending?.requestId === requestId) {
+			control.pending = null;
+		}
 		return answer;
 	}, context);
 
@@ -201,6 +222,17 @@ export async function ask(
 	return answer === undefined
 		? { submissionId: submission.id, status: "done" }
 		: { submissionId: submission.id, status: "done", answer };
+}
+
+/** Açúcar para o CLI: `submit()` + `watch()`. */
+export async function ask(
+	session: AgentSession,
+	prompt: string,
+	context: Context,
+	requestId?: string,
+): Promise<AskOutcome> {
+	const submission = await submit(session, prompt, context, requestId);
+	return watch(session, submission, context);
 }
 
 export async function closeAgent(
@@ -214,14 +246,21 @@ export async function closeAgent(
 	}
 }
 
+/**
+ * Limpa a intenção se ela ainda é a desta submissão. Um `submit` posterior pode
+ * ter gravado outra, e apagar a dele faria o próximo crash reenviar input
+ * duplicado.
+ */
 async function clearPending(
 	conversation: Conversation,
-	requestId: string,
+	requestId: string | undefined,
 	context: Context,
 ): Promise<void> {
 	await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
-		if (control.pending?.requestId === requestId) control.pending = null;
+		if (requestId !== undefined && control.pending?.requestId === requestId) {
+			control.pending = null;
+		}
 	}, context);
 }
 

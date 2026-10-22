@@ -29,13 +29,16 @@ interface Resultado {
 }
 
 function runChild(
-	mode: "crash" | "resume",
+	mode: "crash" | "submit" | "resume",
 	db: string,
 	cwd: string,
 	prompt: string,
+	requestId?: string,
 ): Promise<Run> {
+	const args = [CHILD, mode, db, cwd, prompt];
+	if (requestId !== undefined) args.push(requestId);
 	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [CHILD, mode, db, cwd, prompt], {
+		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let stdout = "";
@@ -81,6 +84,37 @@ describe("crash no caminho do agente", () => {
 				expect(resultado.status).toBe("done");
 				expect(resultado.answer).toBe("resposta final");
 				// Uma única entrada de usuário: a submissão foi reaproveitada.
+				expect(resultado.userEntries).toBe(1);
+			});
+		},
+		TIMEOUT,
+	);
+
+	it(
+		"handoff: cliente admite com requestId próprio, outro cliente retoma",
+		async () => {
+			await withDb(async (db, cwd) => {
+				const clienteWeb = await runChild(
+					"submit",
+					db,
+					cwd,
+					"analise o repo",
+					"web-42",
+				);
+				expect(clienteWeb.signal).toBe("SIGKILL");
+
+				const clienteCli = await runChild(
+					"resume",
+					db,
+					cwd,
+					"analise o repo",
+					"web-42",
+				);
+				expect(clienteCli.code).toBe(0);
+
+				const resultado = parse(clienteCli);
+				expect(resultado.status).toBe("done");
+				expect(resultado.answer).toBe("resposta final");
 				expect(resultado.userEntries).toBe(1);
 			});
 		},

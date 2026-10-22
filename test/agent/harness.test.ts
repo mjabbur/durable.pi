@@ -15,6 +15,8 @@ import {
 	ask,
 	closeAgent,
 	openAgent,
+	submit,
+	watch,
 } from "../../src/agent/harness.js";
 
 const context = BACKGROUND_CONTEXT;
@@ -101,6 +103,64 @@ describe("openAgent", () => {
 			expect(vistos).toBeGreaterThan(antes.messages.length);
 			expect(texto).toContain("primeira pergunta");
 			await closeAgent(second.session, context);
+		});
+	});
+
+	it("separa admissão (submit) de espera (watch)", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session, faux } = await openFake(dir, dbPath);
+			faux.setResponses([fauxAssistantMessage("resposta")]);
+
+			const submission = await submit(session, "primeiro passo", context);
+			// Admitido: o input já está no transcript antes de esperar a resposta.
+			const durante = await session.conversation.context(context);
+			expect(
+				durante.entries.some((entry) => entry.kind === "pi.user"),
+			).toBe(true);
+
+			const outcome = await watch(session, submission, context);
+			expect(outcome).toMatchObject({ status: "done", answer: "resposta" });
+			await closeAgent(session, context);
+		});
+	});
+
+	it("requestId explícito não colapsa prompts iguais de clientes distintos", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session, faux } = await openFake(dir, dbPath);
+			faux.setResponses([
+				fauxAssistantMessage("da web"),
+				fauxAssistantMessage("do cli"),
+			]);
+
+			const daWeb = await submit(session, "oi", context, "cliente-web-1");
+			const doCli = await submit(session, "oi", context, "cliente-cli-1");
+
+			expect(daWeb.id).not.toBe(doCli.id);
+			expect(await watch(session, daWeb, context)).toMatchObject({
+				status: "done",
+			});
+			expect(await watch(session, doCli, context)).toMatchObject({
+				status: "done",
+			});
+
+			const view = await session.conversation.context(context);
+			const usuarios = view.entries.filter((entry) => entry.kind === "pi.user");
+			expect(usuarios.length).toBe(2);
+			await closeAgent(session, context);
+		});
+	});
+
+	it("mesmo requestId devolve a mesma submissão", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session, faux } = await openFake(dir, dbPath);
+			faux.setResponses([fauxAssistantMessage("uma só")]);
+
+			const primeira = await submit(session, "oi", context, "id-fixo");
+			await watch(session, primeira, context);
+			const segunda = await submit(session, "oi", context, "id-fixo");
+
+			expect(segunda.id).toBe(primeira.id);
+			await closeAgent(session, context);
 		});
 	});
 
