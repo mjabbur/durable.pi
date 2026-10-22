@@ -33,6 +33,11 @@ Relatório em `docs/audits/2026-10-22-m0.md`. Corrigidos até aqui:
   `--model` aplicado via `configure()` em sessão existente, `requestId`
   reaproveitado de intenção commitada (reenvio após crash não duplica input),
   bootstrap fecha storage/Harness quando um passo falha.
+- Container: `GEMINI_API_KEY` encaminhada, `--userns=keep-id` no podman
+  rootless, recusa de root, teste da execução real do wrapper.
+- Teste de crash pelo caminho do agente (`test/crash-agent.test.ts`): SIGKILL
+  dentro da geração, mesmo prompt repetido, uma única entrada `pi.user`.
+- Auditoria do M0 considerada fechada; itens em aberto passam ao M1.
 
 ## Pendências
 

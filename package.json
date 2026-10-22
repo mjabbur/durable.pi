@@ -18,7 +18,8 @@
 		"test": "vitest run",
 		"lint": "eslint .",
 		"build": "tsc -p tsconfig.build.json",
-		"start": "node bin/durable-pi.mjs"
+		"start": "node bin/durable-pi.mjs",
+		"pretest": "npm run build"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.4.0",
