@@ -113,9 +113,11 @@ caminho do config sem executar nada.
 ### Credenciais
 
 A chave do provedor entra por env, nunca por mount de `~/.pi` ou `~/.config`.
+Só o nome da variável vai na linha de comando do container; o valor fica no
+ambiente do processo.
 Todos os provedores embutidos do pi-ai são registrados; cada um lê a sua
 variável: `OPENCODE_API_KEY` (opencode-go), `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, entre outras.
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, entre outras.
 
 Credencial de `git` **não entra no container** no v1: o agente commita, e o
 push é feito no host. Token em env é legível por qualquer processo do
