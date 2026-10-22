@@ -22,7 +22,8 @@ Opções:
 export type PrintOptions = {
 	readonly mode: "print";
 	readonly prompt: string;
-	readonly model: string;
+	/** Só `--model`; ambiente e arquivo de config entram em `main()`. */
+	readonly model?: string;
 	readonly sessionDir: string;
 	readonly sessionId?: string;
 	readonly resume: boolean;
@@ -99,11 +100,6 @@ export function parseArgs(
 		throw new UsageError("informe um prompt com -p ou como argumento");
 	}
 
-	const selectedModel = model ?? env["DURABLE_PI_MODEL"] ?? "";
-	if (selectedModel === "") {
-		throw new UsageError("informe --model provider/modelo ou DURABLE_PI_MODEL");
-	}
-
 	if (noSession && resume) {
 		throw new UsageError("--continue não combina com --no-session");
 	}
@@ -124,7 +120,7 @@ export function parseArgs(
 	return {
 		mode: "print",
 		prompt: text,
-		model: selectedModel,
+		...(model === undefined ? {} : { model }),
 		sessionDir: sessionDir ?? defaultSessionDir(env),
 		...(sessionId === undefined ? {} : { sessionId }),
 		resume,

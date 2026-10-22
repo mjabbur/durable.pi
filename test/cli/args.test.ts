@@ -20,12 +20,14 @@ describe("parseArgs", () => {
 		});
 	});
 
-	it("aceita o prompt posicional e o modelo do ambiente", () => {
+	it("aceita o prompt posicional e deixa o modelo para o main", () => {
 		const options = parseArgs(["explique", "o", "repo"], {
 			...env,
 			DURABLE_PI_MODEL: "p/m",
 		});
-		expect(options).toMatchObject({ prompt: "explique o repo", model: "p/m" });
+		expect(options).toMatchObject({ prompt: "explique o repo" });
+		if (options.mode !== "print") throw new Error("esperado modo print");
+		expect(options.model).toBeUndefined();
 	});
 
 	it("carrega --session, --continue e --no-session", () => {
@@ -40,10 +42,9 @@ describe("parseArgs", () => {
 		).toMatchObject({ noSession: true });
 	});
 
-	it("recusa prompt vazio, opção desconhecida e modelo ausente", () => {
+	it("recusa prompt vazio e opção desconhecida", () => {
 		expect(() => parseArgs(["--model", "p/m"], env)).toThrow(UsageError);
 		expect(() => parseArgs(["-p", "x", "--nope"], env)).toThrow(UsageError);
-		expect(() => parseArgs(["-p", "x"], env)).toThrow(UsageError);
 	});
 
 	it("recusa combinações incoerentes", () => {

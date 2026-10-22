@@ -117,34 +117,27 @@ describe("openAgent", () => {
 		});
 	});
 
-	it("aplica o modelo pedido numa sessão existente e persiste", async () => {
+	it("aplica o modelo efetivo da execução, sem virar default da sessão", async () => {
 		await withDir(async (dir, dbPath) => {
-			const primeiro = await openFake(dir, dbPath);
-			primeiro.faux.setResponses([fauxAssistantMessage("ok")]);
-			await ask(primeiro.session, "oi", context);
-			await closeAgent(primeiro.session, context);
-
-			const segundo = fauxProvider({ provider: "faux-b" });
-			const modelo = segundo.getModel();
+			const a = fauxProvider({ provider: "faux-a" }).getModel();
+			const b = fauxProvider({ provider: "faux-b" }).getModel();
 			const models = createModels();
-			models.setProvider(segundo.provider);
-			const modelRef = { provider: modelo.provider, modelId: modelo.id };
+			models.setProvider(fauxProvider({ provider: "faux-a" }).provider);
+			models.setProvider(fauxProvider({ provider: "faux-b" }).provider);
+			const refA = { provider: a.provider, modelId: a.id };
+			const refB = { provider: b.provider, modelId: b.id };
 
-			const reaberta = await openAgent(
-				{ dbPath, cwd: dir, model: modelRef, models },
-				context,
-			);
-			const agente = await reaberta.conversation.agent(context);
+			const modeloDe = async (model: typeof refA) => {
+				const session = await openAgent({ dbPath, cwd: dir, model, models }, context);
+				const agente = await session.conversation.agent(context);
+				await closeAgent(session, context);
+				return agente.model;
+			};
 
-			expect(agente.model).toEqual(modelRef);
-			await closeAgent(reaberta, context);
-
-			const deNovo = await openAgent(
-				{ dbPath, cwd: dir, model: modelRef, models },
-				context,
-			);
-			expect((await deNovo.conversation.agent(context)).model).toEqual(modelRef);
-			await closeAgent(deNovo, context);
+			expect(await modeloDe(refA)).toEqual(refA);
+			// Execução com --model diferente não muda a próxima.
+			expect(await modeloDe(refB)).toEqual(refB);
+			expect(await modeloDe(refA)).toEqual(refA);
 		});
 	});
 

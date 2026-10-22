@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelRef } from "@earendil-works/pi-durable";
 
+import { agentConfigPath, readAgentConfig } from "../agent/config.js";
 import { ask, closeAgent, openAgent, type AgentSession } from "../agent/harness.js";
 import {
 	ensureSessionDir,
@@ -42,7 +43,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 			await ensureSessionDir(dir);
 		}
 
-		const model = parseModel(options.model);
+		const model = parseModel(await resolveModelText(options));
 		const id = await resolveSessionId(dir, options);
 		session = await openAgent(
 			{ dbPath: sessionPath(dir, id), cwd: process.cwd(), model },
@@ -93,6 +94,26 @@ function usageFailure(error: unknown): number {
 	throw error;
 }
 
+/**
+ * Modelo efetivo da execução: `--model`, depois `DURABLE_PI_MODEL`, depois o
+ * arquivo de config. A sessão guarda o último modelo usado, mas ele nunca é
+ * default — `--model` de uma execução não muda a próxima.
+ */
+async function resolveModelText(options: PrintOptions): Promise<string> {
+	if (options.model !== undefined) return options.model;
+
+	const fromEnv = process.env["DURABLE_PI_MODEL"];
+	if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+
+	const config = await readAgentConfig();
+	if (config.model !== undefined) return config.model;
+
+	throw new UsageError(
+		`defina o modelo em ${agentConfigPath()} ({"model": "provider/modelo"}) ` +
+			"ou passe --model",
+	);
+}
+
 async function resolveSessionId(
 	dir: string,
 	options: PrintOptions,
@@ -108,7 +129,7 @@ async function resolveSessionId(
 	return newSessionId();
 }
 
-function parseModel(text: string): ModelRef {
+export function parseModel(text: string): ModelRef {
 	const slash = text.indexOf("/");
 	if (slash <= 0 || slash === text.length - 1) {
 		throw new UsageError(

@@ -39,6 +39,14 @@ Relatório em `docs/audits/2026-10-22-m0.md`. Corrigidos até aqui:
   dentro da geração, mesmo prompt repetido, uma única entrada `pi.user`.
 - Auditoria do M0 considerada fechada; itens em aberto passam ao M1.
 
+## Config do agente
+
+`~/.config/durable-pi/config.json` (ou `$XDG_CONFIG_HOME/...`, ou
+`DURABLE_PI_AGENT_CONFIG`) define o modelo padrão: `{"model": "provider/modelo"}`.
+Ordem de resolução: `--model` → `DURABLE_PI_MODEL` → config → erro de uso.
+`--model` não é pegajoso: o modelo gravado na sessão é o último aplicado, nunca
+o default da próxima execução. Exemplo em `docs/agent-config.example.json`.
+
 ## Pendências
 
 - **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial
