@@ -87,6 +87,8 @@ async function withFake(
 	run: (deps: {
 		terminal: FakeTerminal;
 		handle: Awaited<ReturnType<typeof openAgent>>;
+		dir: string;
+		dbPath: string;
 	}) => Promise<void>,
 ) {
 	const dir = await mkdtemp(join(tmpdir(), "durable-tui-app-"));
@@ -94,9 +96,10 @@ async function withFake(
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const model = faux.getModel();
+	const dbPath = join(dir, "session.sqlite");
 	const handle = await openAgent(
 		{
-			dbPath: join(dir, "session.sqlite"),
+			dbPath,
 			cwd: dir,
 			model: { provider: model.provider, modelId: model.id },
 			models,
@@ -105,7 +108,7 @@ async function withFake(
 	);
 	faux.setResponses([fauxAssistantMessage("resposta final")]);
 	try {
-		await run({ terminal: new FakeTerminal(), handle });
+		await run({ terminal: new FakeTerminal(), handle, dir, dbPath });
 	} finally {
 		await closeAgent(handle, context);
 		await rm(dir, { recursive: true, force: true });
@@ -129,6 +132,99 @@ describe("TUI", () => {
 			await waitFor(() => terminal.text.includes("ocioso"), "turno encerrado");
 
 			terminal.send("\u0003");
+			await expect(running).resolves.toEqual({ code: 0 });
+		});
+	});
+
+	it("!comando mostra a saída e sobrevive ao resume", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-shell-"));
+		const dbPath = join(dir, "session.sqlite");
+		const openFake = async () => {
+			const faux = fauxProvider();
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const model = faux.getModel();
+			const handle = await openAgent(
+				{
+					dbPath,
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+			faux.setResponses([fauxAssistantMessage("resposta final")]);
+			return handle;
+		};
+
+		try {
+			const handle = await openFake();
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("!echo persistido");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("persistido"),
+				"saída do comando",
+			);
+			await waitFor(() => terminal.text.includes("ocioso"), "comando encerrado");
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(handle, context);
+
+			// Reabre o mesmo banco: o bloco de shell é entrada durável.
+			const reopened = await openFake();
+			try {
+				const view = await reopened.conversation.context(context);
+				expect(
+					view.entries.some((entry) => entry.kind === "durable.shell"),
+				).toBe(true);
+			} finally {
+				await closeAgent(reopened, context);
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("/model e /thinking passam pelo configure() do agente", async () => {
+		await withFake(async ({ terminal, handle }) => {
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("/model outro/modelo");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("outro/modelo"),
+				"modelo no status",
+			);
+			expect(
+				(await handle.conversation.agent(context)).model,
+			).toMatchObject({ provider: "outro", modelId: "modelo" });
+
+			terminal.send("/thinking alto");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("nível inválido"),
+				"nível recusado",
+			);
+			expect(
+				(await handle.conversation.agent(context)).thinkingLevel,
+			).not.toBe("alto");
+
+			terminal.send("/thinking high");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("raciocínio"), "nível aceito");
+			expect((await handle.conversation.agent(context)).thinkingLevel).toBe(
+				"high",
+			);
+
+			terminal.send("/quit");
+			terminal.send("\r");
 			await expect(running).resolves.toEqual({ code: 0 });
 		});
 	});
