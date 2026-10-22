@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ async function withDb(run: (dbPath: string) => Promise<void>) {
 }
 
 /** Processo filho que segura o lock até ser morto. */
-function holdUntilKilled(dbPath: string): Promise<import("node:child_process").ChildProcess> {
+function holdUntilKilled(dbPath: string): Promise<ChildProcess> {
 	const script = `
 		import("node:sqlite").then(({ DatabaseSync }) => {
 			const db = new DatabaseSync(${JSON.stringify(`${dbPath}.lock`)});

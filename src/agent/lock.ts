@@ -18,6 +18,9 @@ export type StorageLock = {
  * kernel, liberado automaticamente quando o processo morre — sem PID, sem
  * relógio, sem arquivo órfão para detectar.
  */
+// API assíncrona de propósito: a chamada é síncrona, mas o contrato do lock é
+// `Promise` para quem abre storage (que é assíncrono).
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function acquireStorageLock(dbPath: string): Promise<StorageLock> {
 	const path = `${dbPath}.lock`;
 	const db = new DatabaseSync(path);
@@ -41,6 +44,7 @@ export async function acquireStorageLock(dbPath: string): Promise<StorageLock> {
 
 	return {
 		path,
+		// eslint-disable-next-line @typescript-eslint/require-await
 		release: async () => {
 			try {
 				db.exec("ROLLBACK");
