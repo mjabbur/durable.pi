@@ -4,7 +4,7 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` em `8140a0e` (+ este PR), 95 testes em 16 arquivos, gates verdes
+- `main` em `8140a0e`, 99 testes em 17 arquivos, gates verdes
   (`typecheck`, `build`, `lint`, `test`).
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
@@ -23,8 +23,8 @@ src/agent/    harness.ts (openAgent, submit, watch, ask, closeAgent),
 src/cli/      args.ts (parse puro), main.ts (ciclo de vida, códigos de saída)
 bin/          durable-pi.mjs
 scripts/      run.sh (container), bakeoff.sh, container.conf.example
-test/         invariants, crash (fixture, charge, agent), agent/*, cli/*,
-              scripts/*, spec/, agent/handoff.muse.test.ts (gerado)
+test/         invariants, crash (fixture, charge, agent, main), agent/*,
+              cli/*, scripts/*, spec/, agent/handoff.muse.test.ts (gerado)
 specs/        counter, charge, handoff
 docs/         DURABILITY, PI-CODE-MAP, ROADMAP, RUNBOOK, audits/
 ```
@@ -57,6 +57,10 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   repassa nada.
 - Recuperação exige a mesma sessão: sem `--session`/`-c` o CLI cria outro
   banco. Em falha ele imprime `sessão: <id>`.
+- `main(argv, { models })`: o catálogo é injetável só para teste. É o único
+  jeito de exercitar o caminho real do CLI (resolver sessão, abrir banco,
+  admitir) contra o provedor faux; `AgentOptions.models` já tinha o mesmo
+  ponto de injeção.
 - `submit()` admite, `watch()` espera e lê, `ask()` é açúcar. Handoff entre
   frontends é por `requestId`; handle de `Submission` não atravessa processo.
 - Testes de contrato são gerados por `muse-spark-1.3-contributor` com
@@ -83,9 +87,9 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
   acomodado (duas perguntas antigas continuam válidas).
 - Tailscale no M3: decidir onde roda (Windows publicando porta do `wslc -p` vs
   `tailscale serve` dentro do WSL).
-- Sobras da auditoria do M1.0: crash pelo `main()` (hoje é pelo `openAgent`),
-  prova de precedência `--model` vs `DURABLE_PI_MODEL`, e lock entre dois
-  containers reais.
+- Sobras da auditoria do M1.0: lock entre dois containers reais (os outros dois
+  itens — crash pelo `main()` e precedência `--model` — fecharam em
+  `test/crash-main.test.ts` e `test/cli/main.test.ts`).
 
 ## Armadilhas conhecidas
 
@@ -94,6 +98,9 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 - No WSL: sem docker e sem podman; `wslc` é binário Windows fora do PATH.
 - `test/scripts/run-sh.test.ts` roda com `PATH` mínimo: `mktemp` não existe,
   então o teste fixa `DURABLE_PI_ENV_FILE`.
+- Fixture que importa `dist/` (agente, main, charge) exige `npm run build`
+  antes: `npx vitest run` sozinho usa o `dist/` velho e o filho falha por
+  outra razão que não a testada.
 - `ConversationId` é `number` com brand; `AskOutcome` usa `settled.answer`
   (EntryId) e a resposta se lê com `tx.entry(AssistantEntry, ...)`.
 - Ferramenta de teste falsa exige `stopReason: "toolUse"` para executar tool;

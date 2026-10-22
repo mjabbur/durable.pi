@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Models } from "@earendil-works/pi-ai";
 import type { ModelRef } from "@earendil-works/pi-durable";
 
 import { agentConfigPath, readAgentConfig } from "../agent/config.js";
@@ -15,8 +16,21 @@ import {
 } from "../agent/sessions.js";
 import { parseArgs, USAGE, UsageError, type PrintOptions } from "./args.js";
 
+/**
+ * Injeção para teste. O catálogo de modelos é a única dependência externa do
+ * `main()` que o teste não consegue montar por argumento: sem ela, o caminho
+ * real do CLI (resolver sessão, abrir o banco, admitir o input) só roda contra
+ * provedores de verdade.
+ */
+export type MainDeps = {
+	readonly models?: Models;
+};
+
 /** Ponto de entrada do CLI. Devolve o código de saída em vez de chamar `process.exit`. */
-export async function main(argv: readonly string[]): Promise<number> {
+export async function main(
+	argv: readonly string[],
+	deps: MainDeps = {},
+): Promise<number> {
 	let options;
 	try {
 		options = parseArgs(argv);
@@ -55,6 +69,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 				// monta em /workspace, então `cwd` não distingue dois projetos.
 				workspace: process.env["DURABLE_PI_WORKSPACE"] ?? process.cwd(),
 				model,
+				...(deps.models === undefined ? {} : { models: deps.models }),
 			},
 			context,
 		);

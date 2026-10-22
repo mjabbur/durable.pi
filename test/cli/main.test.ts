@@ -2,6 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+	createModels,
+	fauxAssistantMessage,
+	fauxProvider,
+} from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../../src/cli/main.js";
@@ -11,10 +16,30 @@ let stderr: string;
 let configDir: string;
 let configPath: string;
 
+/**
+ * Catálogo com um único provedor faux. Só o ref devolvido resolve, então a
+ * precedência fica observável no sucesso da execução: `no_model` não diz qual
+ * modelo foi pedido, e era por isso que o teste antigo passava mesmo se a flag
+ * fosse ignorada.
+ */
+function fauxCatalog(provider: string): {
+	models: ReturnType<typeof createModels>;
+	ref: string;
+} {
+	const faux = fauxProvider({ provider });
+	faux.setResponses([fauxAssistantMessage("resposta")]);
+	const models = createModels();
+	models.setProvider(faux.provider);
+	const modelo = faux.getModel();
+	return { models, ref: `${modelo.provider}/${modelo.id}` };
+}
+
 beforeEach(async () => {
 	configDir = await mkdtemp(join(tmpdir(), "durable-cli-config-"));
 	configPath = join(configDir, "config.json");
 	process.env["DURABLE_PI_AGENT_CONFIG"] = configPath;
+	// Isola a precedência do ambiente de quem roda os testes.
+	delete process.env["DURABLE_PI_MODEL"];
 	stdout = "";
 	stderr = "";
 	vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -30,6 +55,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	vi.restoreAllMocks();
 	delete process.env["DURABLE_PI_AGENT_CONFIG"];
+	delete process.env["DURABLE_PI_MODEL"];
 	await rm(configDir, { recursive: true, force: true });
 });
 
@@ -58,43 +84,53 @@ describe("main", () => {
 	});
 
 	it("usa o modelo do arquivo de config", async () => {
-		await writeFile(configPath, JSON.stringify({ model: "nao/existe" }));
-		const dir = await mkdtemp(join(tmpdir(), "durable-cli-sessao-"));
-		try {
-			const code = await main([
-				"-p",
-				"x",
-				"--no-session",
-				"--session-dir",
-				dir,
-			]);
-			// Passou da resolução do modelo: o erro agora é do provedor.
-			expect(code).toBe(1);
-			expect(stderr).toContain("no_model");
-			expect(stderr).not.toContain("defina o modelo");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
+		const { models, ref } = fauxCatalog("config");
+		await writeFile(configPath, JSON.stringify({ model: ref }));
+
+		const code = await main(["-p", "x", "--no-session"], { models });
+
+		expect(code).toBe(0);
+		expect(stdout).toContain("resposta");
 	});
 
-	it("--model vence o arquivo de config", async () => {
+	it("DURABLE_PI_MODEL vence o arquivo de config", async () => {
+		const { models, ref } = fauxCatalog("env");
 		await writeFile(configPath, JSON.stringify({ model: "config/x" }));
-		const dir = await mkdtemp(join(tmpdir(), "durable-cli-sessao-"));
-		try {
-			const code = await main([
-				"-p",
-				"x",
-				"--model",
-				"flag/y",
-				"--no-session",
-				"--session-dir",
-				dir,
-			]);
-			expect(code).toBe(1);
-			expect(stderr).toContain("no_model");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
+		process.env["DURABLE_PI_MODEL"] = ref;
+
+		const code = await main(["-p", "x", "--no-session"], { models });
+
+		expect(code).toBe(0);
+		expect(stdout).toContain("resposta");
+	});
+
+	it("--model vence DURABLE_PI_MODEL e o config", async () => {
+		const { models, ref } = fauxCatalog("flag");
+		const ambiente = fauxCatalog("env").ref;
+		await writeFile(configPath, JSON.stringify({ model: "config/x" }));
+		process.env["DURABLE_PI_MODEL"] = ambiente;
+
+		const code = await main(
+			["-p", "x", "--model", ref, "--no-session"],
+			{ models },
+		);
+
+		expect(code).toBe(0);
+		expect(stdout).toContain("resposta");
+	});
+
+	it("--model inválido não cai para DURABLE_PI_MODEL nem para o config", async () => {
+		const { models, ref } = fauxCatalog("env");
+		await writeFile(configPath, JSON.stringify({ model: "config/x" }));
+		process.env["DURABLE_PI_MODEL"] = ref;
+
+		const code = await main(
+			["-p", "x", "--model", "flag/x", "--no-session"],
+			{ models },
+		);
+
+		expect(code).toBe(1);
+		expect(stderr).toContain("no_model");
 	});
 
 	it("sai com 2, sem stack trace, em id de sessão inválido", async () => {
