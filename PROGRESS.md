@@ -17,7 +17,8 @@ raciocínio.
 
 ## Próximos passos
 
-1. `src/index.ts` e mapa `exports` se o projeto virar biblioteca.
+Marco atual: `docs/ROADMAP.md`. M0 (CLI `-p` com sessão durável) é o primeiro
+passo; `src/index.ts` e mapa `exports` só quando o projeto virar biblioteca.
 
 ## Pendências
 

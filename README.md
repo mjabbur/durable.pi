@@ -33,6 +33,7 @@ Pronto = os três verdes. O CI roda a mesma sequência.
 | `docs/DURABILITY.md` | por que cada invariante existe |
 | `docs/RUNBOOK.md` | sintoma, diagnóstico e ação em produção |
 | `docs/PI-CODE-MAP.md` | mapa do código do Pi e do pi-durable |
+| `docs/ROADMAP.md` | marco do Pi durável: CLI, servidor e web |
 | `bakeoff/` | bancada que gera testes a partir da spec |
 | `scripts/` | automação da bancada |
 
