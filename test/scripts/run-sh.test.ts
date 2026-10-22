@@ -53,7 +53,13 @@ function runScript(
 	return spawnSync("/bin/bash", [SCRIPT, ...args], {
 		cwd: dir,
 		encoding: "utf8",
-		env: { PATH: dir, HOME: join(dir, "home"), ...env },
+		env: {
+			PATH: dir,
+			HOME: join(dir, "home"),
+			// Sem mktemp no PATH do teste; o arquivo de env é do teste.
+			DURABLE_PI_ENV_FILE: join(dir, "env"),
+			...env,
+		},
 	});
 }
 
@@ -183,6 +189,7 @@ describe("scripts/run.sh", () => {
 		await withDir(async (dir) => {
 			const runtime = await recordingRuntime(dir);
 
+			const envFile = join(dir, "env");
 			const result = runScript(
 				dir,
 				{
@@ -190,6 +197,7 @@ describe("scripts/run.sh", () => {
 					DURABLE_PI_DOCKER: runtime,
 					DURABLE_PI_VOLUME: "vol",
 					DURABLE_PI_IMAGE: "img",
+					DURABLE_PI_ENV_FILE: envFile,
 					OPENROUTER_API_KEY: "segredo-nao-vaza",
 				},
 				["-p", "oi", "--model", "p/m"],
@@ -202,9 +210,13 @@ describe("scripts/run.sh", () => {
 			expect(agente).toContain(`-v ${dir}:/workspace`);
 			expect(agente).toContain("-v vol:/home/agent");
 			expect(agente).toContain("-w /workspace");
-			expect(agente).toContain("-e OPENROUTER_API_KEY");
+			expect(agente).toContain(`--env-file ${envFile}`);
 			expect(agente).toContain("img -p oi --model p/m");
+			// O segredo vai no arquivo, nunca na linha de comando.
 			expect(agente).not.toContain("segredo-nao-vaza");
+			const env = await readFile(envFile, "utf8");
+			expect(env).toContain("OPENROUTER_API_KEY=segredo-nao-vaza");
+			expect(env).toContain(`DURABLE_PI_WORKSPACE=${dir}`);
 		});
 	});
 
@@ -238,19 +250,24 @@ exit 0
 		});
 	});
 
-	it("passa o workspace do host para o container", async () => {
+	it("passa o workspace do host para o container via env file", async () => {
 		await withDir(async (dir) => {
 			const runtime = await recordingRuntime(dir);
+			const envFile = join(dir, "env");
 
 			runScript(dir, {
 				DURABLE_PI_RUNTIME: "docker",
 				DURABLE_PI_DOCKER: runtime,
 				DURABLE_PI_VOLUME: "vol",
 				DURABLE_PI_IMAGE: "img",
+				DURABLE_PI_ENV_FILE: envFile,
 			});
 
 			const agente = (await calls(dir)).at(-1) ?? "";
-			expect(agente).toContain("-e DURABLE_PI_WORKSPACE");
+			expect(agente).toContain(`--env-file ${envFile}`);
+			expect(await readFile(envFile, "utf8")).toContain(
+				`DURABLE_PI_WORKSPACE=${dir}`,
+			);
 		});
 	});
 

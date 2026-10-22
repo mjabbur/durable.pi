@@ -122,8 +122,9 @@ caminho do config sem executar nada.
 ### Credenciais
 
 A chave do provedor entra por env, nunca por mount de `~/.pi` ou `~/.config`.
-Só o nome da variável vai na linha de comando do container; o valor fica no
-ambiente do processo.
+As variáveis vão por um arquivo temporário (`--env-file`, modo 0600, removido no
+fim): o wslc ignora `-e NAME` sem valor, então o valor nunca chegava ao
+container, e `-e NAME=VALUE` colocaria segredo na linha de comando.
 Todos os provedores embutidos do pi-ai são registrados; cada um lê a sua
 variável: `OPENCODE_API_KEY` (opencode-go), `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, entre outras.

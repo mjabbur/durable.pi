@@ -55,3 +55,12 @@ foi verificado. Não guarde aqui o que já está em `docs/DURABILITY.md`.
     handle morre com o Harness (`Session is closed`). Corrigido: handoff é por
     `requestId`, handle não atravessa processo.
 - Segunda rodada: 10/10 verdes, sem edição manual do teste gerado.
+
+## wslc ignora `-e NAME`
+
+- `wslc run -e VAR` sem `=valor` não repassa a variável do host: o container vê
+  `process.env.VAR === undefined`. Descoberto no smoke do M1.0 (o agente rodava
+  sem `OPENROUTER_API_KEY`, e o workspace chegava como `/workspace`).
+- `scripts/run.sh` passou a montar `--env-file` (0600, temporário), suportado
+  por `wslc`, docker e podman. Verificado no container: `DURABLE_PI_WORKSPACE`
+  agora chega com o caminho do host e a sessão recusa retomada em outro repo.
