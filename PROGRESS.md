@@ -17,9 +17,16 @@ raciocínio.
 
 ## Próximos passos
 
-1. Decidir se `test/spec/` vira gate de CI (falha o PR se o teste for editado
-   durante a implementação).
-2. `src/index.ts` e mapa `exports` se o projeto virar biblioteca.
+1. `src/index.ts` e mapa `exports` se o projeto virar biblioteca.
+
+## Pendências
+
+- **Gate de `test/spec/` no CI** (adiado por decisão, 2026-10-22). O objetivo é
+  falhar o PR quando um arquivo de `test/spec/` muda no mesmo diff da
+  implementação, para que o teste de contrato não seja ajustado ao código.
+  Antes de implementar, resolver: como distinguir correção legítima de spec
+  (spec atualizada + teste regenerado) de teste acomodado; e se o gate compara
+  diff do PR ou exige que `test/spec/` venha em commit separado.
 
 ## Feito
 
