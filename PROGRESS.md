@@ -2,8 +2,8 @@
 
 ## Estado
 
-- Gates verdes: typecheck, lint e 24 testes (3 invariante, 8 counter, 9 charge,
-  4 crash).
+- Gates verdes: typecheck, lint e 27 testes (3 invariante, 8 counter, 9 charge,
+  4 crash de fixture, 3 crash de `chargeOnce`).
 - `src/counter.ts` e `src/charge.ts` implementados contra as specs.
 - Bake-off fechado: `muse-spark-1.3-contributor`, `--thinking low`, medida por
   artefato.
@@ -17,12 +17,17 @@ raciocínio.
 
 ## Próximos passos
 
-1. Crash test em processo filho exercitando `chargeOnce` real, não só a task do
-   fixture.
-2. Decidir se `test/spec/` vira gate de CI (falha o PR se o teste for editado
+1. Decidir se `test/spec/` vira gate de CI (falha o PR se o teste for editado
    durante a implementação).
-3. `src/index.ts` e mapa `exports` se o projeto virar biblioteca.
-4. Regra do overlay de `tx.doc()` no `AGENTS.md`.
+2. `src/index.ts` e mapa `exports` se o projeto virar biblioteca.
+
+## Feito
+
+- Repositório público, CI em PR, ruleset em `main` (PR obrigatório, `gates`
+  exigido) e secret scanning com push protection.
+- `AGENTS.md` com o modelo de teste e a regra do overlay de `tx.doc()`.
+- `test/crash-charge.test.ts`: `SIGKILL` dentro do provedor de `chargeOnce`;
+  regerar a chave no resume quebra 2 dos 3 casos.
 
 ## Bloqueios
 
