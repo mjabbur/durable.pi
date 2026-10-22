@@ -24,15 +24,10 @@ SQLite, `Dockerfile` e `scripts/run.sh`. M1 é a TUI sobre `pi-tui`.
 
 ## Pendências
 
-- **Credencial de `git` no container** (decidir com o usuário, 2026-10-22).
-  `git push` dentro do container exige token restrito ao repo ou socket SSH
-  montado; montar `SSH_AUTH_SOCK` devolve ao agente a chave para qualquer host.
-  Alternativa mínima: só commits locais até a decisão.
-- **Imagem não validada nesta máquina** (2026-10-22). Não há `docker` nem
-  `podman` no ambiente onde o M0 foi escrito; `Dockerfile` e `scripts/run.sh`
-  foram escritos mas nunca executados. Validar com
-  `docker build -t durable-pi:dev . && scripts/run.sh -p "..."` antes de
-  considerar o M0 fechado.
+- **Push a partir do container** (M3). Decidido em 2026-10-22: sem credencial
+  de `git` dentro do container; o agente commita e o push é feito no host.
+  Quando push automático for requisito, o caminho é um proxy de credencial no
+  host via socket, para o token nunca entrar no container.
 
 - **Gate de `test/spec/` no CI** (adiado por decisão, 2026-10-22). O objetivo é
   falhar o PR quando um arquivo de `test/spec/` muda no mesmo diff da
@@ -48,6 +43,10 @@ SQLite, `Dockerfile` e `scripts/run.sh`. M1 é a TUI sobre `pi-tui`.
 - `AGENTS.md` com o modelo de teste e a regra do overlay de `tx.doc()`.
 - `test/crash-charge.test.ts`: `SIGKILL` dentro do provedor de `chargeOnce`;
   regerar a chave no resume quebra 2 dos 3 casos.
+- M0 em `main`: núcleo do agente, CLI `-p`, build e imagem.
+- Imagem validada no WSL com `wslc` 3.0.3.0: build, volume nomeado, bind do
+  `cwd` e sessão SQLite persistida no volume. O caminho Docker usa o mesmo
+  `scripts/run.sh` e não foi exercitado aqui.
 
 ## Bloqueios
 

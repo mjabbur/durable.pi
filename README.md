@@ -74,6 +74,30 @@ As sessões ficam no volume `durable-pi-home`, em
 `/home/agent/.local/share/durable-pi/sessions/<id>.sqlite`. O `cwd` entra em
 `/workspace`; o agente só vê o que estiver montado.
 
+### WSL
+
+No WSL o runtime é o `wslc` (WSL containers, WSL ≥ 2.9.3), não há Docker no
+distro. O binário fica no lado Windows:
+
+```bash
+"/mnt/c/Program Files/WSL/wslc.exe" build -t durable-pi:dev .
+scripts/run.sh --help          # detecta wslc sozinho
+```
+
+`scripts/run.sh` usa `DURABLE_PI_RUNTIME=docker|wslc` (padrão `auto`) e
+`DURABLE_PI_WSLC` para o caminho do binário.
+
+### Credenciais
+
+A chave do provedor entra por env (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `GOOGLE_API_KEY`), nunca por mount de `~/.pi` ou `~/.config`.
+
+Credencial de `git` **não entra no container** no v1: o agente commita, e o
+push é feito no host. Token em env é legível por qualquer processo do
+container, inclusive um comando gerado pelo modelo; quando push automático for
+requisito, a solução é um proxy de credencial no host via socket, com token
+fora do container.
+
 ## Bake-off
 
 ```bash
