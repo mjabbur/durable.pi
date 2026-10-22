@@ -148,6 +148,13 @@ describe("main", () => {
 		expect(stderr).not.toContain("    at ");
 	});
 
+	it("recusa o modo interativo sem terminal (TTY)", async () => {
+		const code = await main(["--model", "p/m"]);
+
+		expect(code).toBe(2);
+		expect(stderr).toContain("TTY");
+	});
+
 	it("sai com 1 quando não há sessão para continuar", async () => {
 		const dir = `/tmp/durable-vazio-${Date.now()}`;
 		const code = await main([

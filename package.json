@@ -1,7 +1,7 @@
 {
 	"name": "durable.pi",
 	"private": true,
-	"description": "Agentes dur\u00e1veis em Node/TypeScript sobre @earendil-works/pi-durable",
+	"description": "Agentes duráveis em Node/TypeScript sobre @earendil-works/pi-durable",
 	"license": "MIT",
 	"type": "module",
 	"engines": {
@@ -24,7 +24,8 @@
 	"dependencies": {
 		"@earendil-works/chord": "1.4.0",
 		"@earendil-works/pi-ai": "1.4.0",
-		"@earendil-works/pi-durable": "1.4.0"
+		"@earendil-works/pi-durable": "1.4.0",
+		"@earendil-works/pi-tui": "1.4.0"
 	},
 	"devDependencies": {
 		"@types/node": "^24.0.0",

@@ -43,8 +43,16 @@ describe("parseArgs", () => {
 	});
 
 	it("recusa prompt vazio e opção desconhecida", () => {
-		expect(() => parseArgs(["--model", "p/m"], env)).toThrow(UsageError);
+		expect(() => parseArgs(["-p", "", "--model", "p/m"], env)).toThrow(
+			UsageError,
+		);
 		expect(() => parseArgs(["-p", "x", "--nope"], env)).toThrow(UsageError);
+	});
+
+	it("sem prompt, escolhe o modo interativo", () => {
+		expect(parseArgs(["--model", "p/m", "--session", "abc"], env)).toMatchObject(
+			{ mode: "interactive", model: "p/m", sessionId: "abc" },
+		);
 	});
 
 	it("recusa combinações incoerentes", () => {
