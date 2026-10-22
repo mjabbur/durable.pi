@@ -54,3 +54,10 @@ abrir arquivo; `dist/*.d.ts` é a API real da versão instalada. Achados vão pa
 
 Diff mínimo; sem refatorar fora do pedido; dependência nova: pergunte.
 `PROGRESS.md` com estado, decisões e próximos passos.
+
+<!-- memd-projeto:inicio -->
+## Memoria compartilhada (memd)
+- Wrapper deste projeto: `memd-pi-durable-pi`. Ao abrir ou retomar a sessao: `memd-pi-durable-pi --skill` e `memd-pi-durable-pi resume`.
+- Escopo dos registros: `durable.pi/<area>`. Fora dele o memd recusa.
+- Para a extensao de commit do Pi: `source .memd-projeto.env` (define MEMD_WRAPPER) antes de abrir o Pi.
+<!-- memd-projeto:fim -->
