@@ -48,6 +48,32 @@ Pronto = os três verdes. O CI roda a mesma sequência.
 
 Desvio da spec atualiza a spec no mesmo PR.
 
+## Uso (M0)
+
+O agente roda em container; o host só precisa de Docker.
+
+```bash
+npm run build                       # compila para dist/
+docker build -t durable-pi:dev .
+export DURABLE_PI_MODEL=opencode-go/seu-modelo
+export OPENROUTER_API_KEY=...       # a chave do provedor usado
+scripts/run.sh -p "crie hello.txt com olá"
+scripts/run.sh -c -p "agora leia o arquivo"   # continua a sessão mais recente
+```
+
+| Flag | Efeito |
+|---|---|
+| `-p, --print <texto>` | prompt; imprime a resposta final e sai |
+| `--model <p/m>` | provider/modelo; sem ele, usa `DURABLE_PI_MODEL` |
+| `--session <id>` | abre uma sessão específica |
+| `-c, --continue` | continua a sessão mais recente |
+| `--session-dir <dir>` | diretório das sessões |
+| `--no-session` | não grava sessão |
+
+As sessões ficam no volume `durable-pi-home`, em
+`/home/agent/.local/share/durable-pi/sessions/<id>.sqlite`. O `cwd` entra em
+`/workspace`; o agente só vê o que estiver montado.
+
 ## Bake-off
 
 ```bash

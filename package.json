@@ -1,7 +1,7 @@
 {
 	"name": "durable.pi",
 	"private": true,
-	"description": "Agentes duráveis em Node/TypeScript sobre @earendil-works/pi-durable",
+	"description": "Agentes dur\u00e1veis em Node/TypeScript sobre @earendil-works/pi-durable",
 	"license": "MIT",
 	"type": "module",
 	"engines": {
@@ -16,7 +16,9 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"lint": "eslint ."
+		"lint": "eslint .",
+		"build": "tsc -p tsconfig.build.json",
+		"start": "node bin/durable-pi.mjs"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.4.0",
@@ -29,5 +31,12 @@
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.0.0",
 		"vitest": "^5.0.5"
-	}
+	},
+	"bin": {
+		"durable-pi": "bin/durable-pi.mjs"
+	},
+	"files": [
+		"bin",
+		"dist"
+	]
 }

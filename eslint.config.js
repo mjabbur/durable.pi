@@ -1,12 +1,24 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-	{ ignores: ["dist/**", "node_modules/**", "coverage/**", "bakeoff/**", "test/fixtures/**"] },
+	// `bin/**` é shim sem lógica: importa `dist/`, que só existe depois do build.
+	{
+		ignores: [
+			"dist/**",
+			"bin/**",
+			"node_modules/**",
+			"coverage/**",
+			"bakeoff/**",
+			"test/fixtures/**",
+		],
+	},
 	...tseslint.configs.recommendedTypeChecked,
 	{
 		languageOptions: {
 			parserOptions: {
-				projectService: { allowDefaultProject: ["eslint.config.js"] },
+				projectService: {
+					allowDefaultProject: ["eslint.config.js", "bin/*.mjs"],
+				},
 				tsconfigRootDir: import.meta.dirname,
 			},
 		},
