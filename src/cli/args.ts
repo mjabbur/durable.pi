@@ -1,4 +1,8 @@
-import { defaultSessionDir, assertSessionId } from "../agent/sessions.js";
+import {
+	defaultSessionDir,
+	assertSessionId,
+	InvalidSessionIdError,
+} from "../agent/sessions.js";
 
 export const USAGE = `durable-pi — agente de código com sessão durável
 
@@ -107,7 +111,14 @@ export function parseArgs(
 		throw new UsageError("--session não combina com --no-session");
 	}
 	if (sessionId !== undefined) {
-		assertSessionId(sessionId);
+		try {
+			assertSessionId(sessionId);
+		} catch (error) {
+			if (error instanceof InvalidSessionIdError) {
+				throw new UsageError(error.message);
+			}
+			throw error;
+		}
 	}
 
 	return {
@@ -127,7 +138,9 @@ function takeValue(
 	flag: string,
 ): string {
 	const value = argv[index + 1];
-	if (value === undefined || value === "") {
+	// Um valor começando com "-" é quase sempre a opção seguinte sem valor:
+	// `--session-dir --no-session` não pode virar diretório chamado "--no-session".
+	if (value === undefined || value === "" || value.startsWith("-")) {
 		throw new UsageError(`${flag} exige um valor`);
 	}
 	return value;
