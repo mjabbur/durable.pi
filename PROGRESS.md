@@ -144,8 +144,12 @@ Ordem sugerida, cada item com teste:
    exibição); slot `done` do snapshot não sobrescreve resultado lido e `done`
    sem `entry` aparece como erro. Cobertura: `test/spec/transcript-events.test.ts`
    (muse) + três testes manuais em `test/tui/transcript.test.ts`.
-4. `void command(prompt)` sem `catch` (`src/tui/app.ts:374`) → aviso central em
-   vez de `unhandledRejection`.
+4. ~~`void command(prompt)` sem `catch`~~: feito em `specs/command-errors/`.
+   Fronteira `reportCommandError` (já existia desde o #40) ganhou `if (exited)`;
+   o `onSelect` do seletor passou a usá-la; `finish()` resolve a saída mesmo se
+   `tui.stop()` lançar; cadeias de `closed` têm `catch`. Cobertura manual em
+   `test/tui/app.test.ts` (rejeição de `list` + prompt seguinte + nenhum
+   `unhandledRejection`); geração do muse não foi adotada (motivo na spec).
 5. Sanitizar ANSI/OSC da saída externa (shell e tools) antes de renderizar.
 6. Falha de storage na TUI: imprimir `sessão: <id>` como o modo `-p` faz.
 7. ~~`parseModelRef`~~: feito em `specs/model-ref/`; partes vazias depois do

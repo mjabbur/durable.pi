@@ -161,8 +161,13 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			// desfecho: quem fecha a sessão é o dono do storage, logo depois daqui.
 			await stopShell();
 		} finally {
-			tui.stop();
-			resolveExit({ code: exitCode });
+			// `stop()` pode lançar com terminal quebrado; a saída não pode ficar
+			// pendurada por causa da limpeza.
+			try {
+				tui.stop();
+			} finally {
+				resolveExit({ code: exitCode });
+			}
 		}
 	}
 
@@ -281,18 +286,22 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			render();
 			return Promise.resolve();
 		});
-		void nextStream.closed.then((end) => {
-			if (token !== attachment) return;
-			if (end.reason === "listener_error") notify(describe(end.error));
-		});
+		void nextStream.closed
+			.then((end) => {
+				if (token !== attachment) return;
+				if (end.reason === "listener_error") notify(describe(end.error));
+			})
+			.catch(reportCommandError);
 		// Falha de storage encerra o Harness: não há retomada no mesmo processo.
-		void next.harness.closed.then((end) => {
-			if (token !== attachment) return;
-			if (end.reason === "failed") {
-				process.stderr.write(`sessão falhou: ${describe(end.error)}\n`);
-				void finish(1);
-			}
-		});
+		void next.harness.closed
+			.then((end) => {
+				if (token !== attachment) return;
+				if (end.reason === "failed") {
+					process.stderr.write(`sessão falhou: ${describe(end.error)}\n`);
+					void finish(1).catch(() => undefined);
+				}
+			})
+			.catch(reportCommandError);
 
 		await refreshAgent();
 		// Observar não liga o scheduler: sem `resume()`, uma submissão colocada
@@ -502,7 +511,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		picker.onSelect = (item) => {
 			overlay.hide();
 			tui.setFocus(editor);
-			void switchSession((switcher) => switcher.open(item.value));
+			void switchSession((switcher) => switcher.open(item.value)).catch(
+				reportCommandError,
+			);
 		};
 		picker.onCancel = () => {
 			overlay.hide();
@@ -611,8 +622,13 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		else void ask(prompt).catch(reportCommandError);
 	};
 
-	/** Fronteira de despacho: comando que rejeita vira aviso, não crash. */
+	/**
+	 * Fronteira de despacho: comando que rejeita vira aviso, não crash. Depois
+	 * da saída não há mais em que avisar: a falha terminal já tem canal próprio
+	 * (`harness.closed` → stderr → código 1).
+	 */
 	function reportCommandError(error: unknown): void {
+		if (exited) return;
 		notify(describe(error));
 	}
 
