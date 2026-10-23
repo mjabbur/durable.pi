@@ -43,6 +43,7 @@ import {
 	type Transcript,
 	type TranscriptBlock,
 } from "./transcript.js";
+import { sanitizeForTerminal } from "./text.js";
 import { editorTheme, markdownTheme, theme } from "./theme.js";
 
 export type SwitchedSession = {
@@ -670,7 +671,11 @@ function componentOf(block: TranscriptBlock): Component {
 		case "shell": {
 			const marker = block.exitCode === 0 ? "✓" : "✗";
 			const head = `${marker} ${theme.bold(`!${block.command}`)}`;
-			const tail = block.output.trimEnd().split("\n").slice(-20).join("\n");
+			const tail = sanitizeForTerminal(block.output)
+				.trimEnd()
+				.split("\n")
+				.slice(-20)
+				.join("\n");
 			return new Text(
 				tail === "" ? head : `${head}\n${theme.dim(tail)}`,
 				1,
@@ -701,7 +706,11 @@ function toolComponent(
 	const marker =
 		block.status === "running" ? "…" : block.status === "error" ? "✗" : "✓";
 	const head = `${marker} ${block.name}`;
-	const tail = block.output.trimEnd().split("\n").slice(-8).join("\n");
+	const tail = sanitizeForTerminal(block.output)
+		.trimEnd()
+		.split("\n")
+		.slice(-8)
+		.join("\n");
 	return new Text(
 		tail === "" ? theme.dim(head) : `${theme.bold(head)}\n${theme.dim(tail)}`,
 		1,

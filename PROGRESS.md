@@ -147,7 +147,9 @@ Ordem sugerida, cada item com teste:
    vez de `unhandledRejection`.
 5. Sanitizar ANSI/OSC da saída externa (shell e tools) antes de renderizar.
 6. Falha de storage na TUI: imprimir `sessão: <id>` como o modo `-p` faz.
-7. `parseModelRef` rejeitar partes só com espaços.
+7. ~~`parseModelRef`~~: feito em `specs/model-ref/`; partes vazias depois do
+   `trim` rejeitam com `InvalidModelRefError`. Cobertura:
+   `test/spec/model-ref.test.ts` (muse, 8 testes). rejeitar partes só com espaços.
 
 Depois disso, M2 — paridade durável:
 
