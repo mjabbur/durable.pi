@@ -23,10 +23,14 @@ export type ShellRun = {
 };
 
 /**
- * Roda um comando no mesmo ambiente do agente (`cwd` do workspace) e grava o
- * resultado no transcript. Cancelar `context` aborta o processo filho.
+ * Roda um comando no mesmo ambiente do agente (`cwd` do workspace) e devolve o
+ * desfecho, sem gravar. Cancelar `context` aborta o processo filho.
+ *
+ * Separado do commit de propósito: o fechamento da TUI precisa distinguir
+ * "processo ainda não terminou" de "commit lento". A classificação do desfecho
+ * fica com quem chama; aqui não há relógio.
  */
-export async function runShell(
+export async function executeShell(
 	session: AgentSession,
 	command: string,
 	context: Context,
@@ -55,18 +59,47 @@ export async function runShell(
 		output = clip(`${output}${output === "" ? "" : "\n"}${result.error.message}`);
 	}
 
-	const run: ShellRun = { command, exitCode, output, aborted };
-	// O commit que grava o resultado não pode herdar o cancelamento do comando.
+	return { command, exitCode, output, aborted };
+}
+
+/**
+ * Grava o desfecho no transcript. O commit não herda o cancelamento do comando.
+ * `requestId` é opcional e serve para que o desfecho normal e o de interrupção
+ * disputem a mesma admissão: o segundo reenvio devolve a submissão existente em
+ * vez de duplicar a entrada.
+ */
+export async function commitShell(
+	session: AgentSession,
+	run: ShellRun,
+	requestId?: string,
+): Promise<void> {
 	await session.conversation.submit(
 		{
 			type: "write",
+			...(requestId === undefined ? {} : { requestId }),
 			entry: {
 				kind: SHELL_ENTRY_KIND,
-				data: { command, exitCode, output, aborted },
+				data: {
+					command: run.command,
+					exitCode: run.exitCode,
+					output: run.output,
+					aborted: run.aborted,
+				},
 			},
 		},
 		BACKGROUND_CONTEXT,
 	);
+}
+
+/** Roda e grava; o caminho simples de quem não precisa separar as fases. */
+export async function runShell(
+	session: AgentSession,
+	command: string,
+	context: Context,
+	requestId?: string,
+): Promise<ShellRun> {
+	const run = await executeShell(session, command, context);
+	await commitShell(session, run, requestId);
 	return run;
 }
 

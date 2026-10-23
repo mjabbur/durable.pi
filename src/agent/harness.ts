@@ -241,6 +241,7 @@ export async function submit(
 export async function resumePendingIntents(
 	session: AgentSession,
 	context: Context,
+	options: { readonly stopped?: () => boolean } = {},
 ): Promise<number> {
 	const { conversation } = session;
 	const pending = await conversation.commit(async (tx) => {
@@ -253,6 +254,8 @@ export async function resumePendingIntents(
 	const resumed: string[] = [];
 	try {
 		for (const intent of pending) {
+			// O fechamento da TUI pode começar no meio da fila: não admita o resto.
+			if (options.stopped?.() === true) break;
 			await conversation.submit(
 				{ type: "input", content: intent.prompt, requestId: intent.requestId },
 				context,
