@@ -55,6 +55,8 @@ export async function chargeOnce(
 	provider: ChargeProvider,
 	context: Context,
 ): Promise<ChargeResult> {
+	// Fora do commit: o callback é puro e pode rodar mais de uma vez.
+	const candidate = randomUUID();
 	const state = await session.commit(async (tx) => {
 		const charges = await tx.doc(Charges, conversationId);
 		// Cópias: valores do draft viram overlay e não podem ser lidos depois que
@@ -72,10 +74,20 @@ export async function chargeOnce(
 		}
 
 		const existing = charges.intents[requestId];
-		const intent: ChargeIntent = {
-			key: existing?.key ?? randomUUID(),
-			amountCents,
-		};
+		if (existing !== undefined) {
+			// O valor da intenção é o compromisso: comparar com o argumento depois
+			// de sobrescrevê-lo sempre daria igual.
+			if (existing.amountCents !== amountCents) {
+				throw new Error(
+					`requestId ${requestId} já tem intenção de ${existing.amountCents} centavos`,
+				);
+			}
+			return {
+				result: undefined,
+				intent: { key: existing.key, amountCents: existing.amountCents },
+			};
+		}
+		const intent: ChargeIntent = { key: candidate, amountCents };
 		charges.intents[requestId] = intent;
 		return { result: undefined, intent };
 	}, context);

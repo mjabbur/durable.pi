@@ -216,6 +216,49 @@ describe("transcript da TUI", () => {
 		expect(state.streaming).toBeUndefined();
 	});
 
+	it("resultado final da tool vence o progresso já exibido", () => {
+		const entry = {
+			id: 7,
+			conversationId: 0,
+			kind: "pi.tool-result",
+			model: [
+				{
+					role: "toolResult",
+					toolCallId: "c1",
+					toolName: "bash",
+					content: [{ type: "text", text: "falhou: permissão negada" }],
+					isError: true,
+				},
+			],
+		};
+		const state = applyEvents(emptyTranscript(), [
+			{
+				type: "tool_execution_start",
+				toolCallId: "c1",
+				toolName: "bash",
+				args: {},
+			} as unknown as AgentEvent,
+			{
+				type: "tool_execution_update",
+				toolCallId: "c1",
+				toolName: "bash",
+				output: { set: "executando..." },
+			} as unknown as AgentEvent,
+			{
+				type: "tool_execution_end",
+				toolCallId: "c1",
+				toolName: "bash",
+				entry,
+			} as unknown as AgentEvent,
+		]);
+
+		expect(state.blocks[0]).toMatchObject({
+			kind: "tool",
+			status: "error",
+			output: "falhou: permissão negada",
+		});
+	});
+
 	it("chamada de tool vira um único bloco com o status do resultado", async () => {
 		const { session, batches, snapshot } = await runWithEvents(
 			[

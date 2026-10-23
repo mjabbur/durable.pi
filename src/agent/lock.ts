@@ -1,4 +1,8 @@
+import { lstat } from "node:fs/promises";
+
 import { DatabaseSync } from "node:sqlite";
+
+import { isErrno } from "./fs-errors.js";
 
 export type StorageLock = {
 	readonly path: string;
@@ -18,10 +22,8 @@ export type StorageLock = {
  * kernel, liberado automaticamente quando o processo morre — sem PID, sem
  * relógio, sem arquivo órfão para detectar.
  */
-// API assíncrona de propósito: a chamada é síncrona, mas o contrato do lock é
-// `Promise` para quem abre storage (que é assíncrono).
-// eslint-disable-next-line @typescript-eslint/require-await
 export async function acquireStorageLock(dbPath: string): Promise<StorageLock> {
+	await assertSinglePath(dbPath);
 	const path = `${dbPath}.lock`;
 	const db = new DatabaseSync(path);
 
@@ -53,6 +55,31 @@ export async function acquireStorageLock(dbPath: string): Promise<StorageLock> {
 			}
 		},
 	};
+}
+
+/**
+ * Um alias (symlink ou hardlink) abre o mesmo SQLite sob outro caminho, e o
+ * lock é por caminho: dois donos entrariam. Recusar é mais simples e seguro do
+ * que tentar descobrir todos os nomes do mesmo inode.
+ */
+async function assertSinglePath(dbPath: string): Promise<void> {
+	let info;
+	try {
+		info = await lstat(dbPath);
+	} catch (error) {
+		if (isErrno(error, "ENOENT")) return;
+		throw error;
+	}
+	if (info.isSymbolicLink()) {
+		throw new Error(
+			`sessão não pode ser symlink (${dbPath}); use o caminho real`,
+		);
+	}
+	if (info.nlink > 1) {
+		throw new Error(
+			`sessão tem ${info.nlink} hardlinks (${dbPath}); o lock não distingue os nomes`,
+		);
+	}
 }
 
 /** SQLite sinaliza concorrência com `SQLITE_BUSY` (5). */

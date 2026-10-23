@@ -9,8 +9,9 @@ export type PendingIntent = {
 /**
  * Mais de uma intenção pode estar pendente: um cliente implícito (CLI) admite
  * um prompt, um cliente explícito (web) admite outro, e nenhum dos dois pode
- * apagar a recuperação do outro. O limite evita crescer sem fim se o processo
- * morrer muitas vezes sem resposta.
+ * apagar a recuperação do outro. Ao atingir o limite, um pedido novo é
+ * recusado antes de gravar — nunca se descarta uma intenção antiga, que pode
+ * estar admitida e sem desfecho.
  */
 export const MAX_PENDING = 8;
 

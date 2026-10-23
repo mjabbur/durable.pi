@@ -30,7 +30,10 @@ Nenhum efeito externo: funções puras sobre dados.
 5. Deltas acumulam no `contentIndex` certo, na ordem recebida; `text` e
    `thinking` do parcial são a soma dos blocos, na ordem dos índices.
 6. `message_end` remove o parcial e acrescenta o bloco final.
-7. `tool_execution_update` com `{ trimStart, append }` corta o início atual
+7a. `tool_execution_end` com entrada de resultado comprometida usa o texto
+    final, mesmo que já exista progresso exibido; progresso antigo não pode
+    esconder erro/diagnóstico. Sem entrada, o progresso é o fallback.
+8. `tool_execution_update` com `{ trimStart, append }` corta o início atual
    antes de acrescentar; com `{ set }` substitui a saída. `trimStart` é relativo
    à janela do produtor (unidades UTF-16), não ao recorte de exibição.
 8. `fromSnapshot` não sobrescreve resultado já lido: um slot `done` cujo

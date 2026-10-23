@@ -69,7 +69,7 @@ que não esteja aberta.
 
 ```ts
 export type SessionSwitcher = {
-  list(): Promise<SessionSummary[]>;
+  list(): Promise<readonly SessionInfo[]>;
   open(id: string): Promise<SwitchedSession>;
   create(): Promise<SwitchedSession>;
 };

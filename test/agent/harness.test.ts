@@ -2,7 +2,10 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+	BACKGROUND_CONTEXT,
+	withCancel,
+} from "@earendil-works/chord/context";
 import {
 	createModels,
 	fauxAssistantMessage,
@@ -170,6 +173,97 @@ describe("openAgent", () => {
 
 			expect(segunda.id).toBe(primeira.id);
 			await closeAgent(session, context);
+		});
+	});
+
+	it("mesmo requestId com prompt diferente recusa em vez de admitir o errado", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session } = await openFake(dir, dbPath);
+
+			await expect(
+				submit(session, "primeiro", context, "id-repetido"),
+			).resolves.toBeDefined();
+			await expect(
+				submit(session, "outro", context, "id-repetido"),
+			).rejects.toThrow(/já pertence a outro prompt/);
+
+			await closeAgent(session, context);
+		});
+	});
+
+	it("no limite de intenções pendentes recusa o novo pedido sem descartar antigo", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session } = await openFake(dir, dbPath);
+			await session.conversation.commit(async (tx) => {
+				const control = await tx.doc(Control, session.conversation.id);
+				for (let index = 0; index < 8; index += 1) {
+					control.pending.push({
+						requestId: `pendente-${index}`,
+						prompt: `pedido ${index}`,
+					});
+				}
+			}, context);
+
+			await expect(submit(session, "nono", context)).rejects.toThrow(
+				/8 intenções pendentes/,
+			);
+			const view = await session.conversation.commit(async (tx) => {
+				const control = await tx.doc(Control, session.conversation.id);
+				return control.pending.map((intent) => intent.requestId);
+			}, context);
+			expect(view).toHaveLength(8);
+			expect(view[0]).toBe("pendente-0");
+
+			await closeAgent(session, context);
+		});
+	});
+
+	it("cancelar a espera do fechamento mantém o lock até a limpeza terminar", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session, faux } = await openFake(dir, dbPath);
+			let release: () => void = () => undefined;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let started = false;
+			faux.setResponses([
+				async () => {
+					started = true;
+					await gate;
+					return fauxAssistantMessage("depois");
+				},
+			]);
+			await submit(session, "segura a invocação", context);
+			// Só fecha depois que a invocação realmente começou: é ela que o
+			// fechamento precisa drenar.
+			for (let attempt = 0; attempt < 200 && !started; attempt += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(started).toBe(true);
+
+			const cancellable = withCancel(context);
+			const closing = closeAgent(session, cancellable.context);
+			cancellable.cancel(new Error("desisti de esperar"));
+			await expect(closing).rejects.toThrow();
+
+			// A limpeza continua e o lock ainda é dela.
+			await expect(openFake(dir, dbPath)).rejects.toThrow(
+				/em uso por outro processo/,
+			);
+
+			release();
+			await session.harness.closed;
+			// O release do lock acontece depois do fechamento; espera curta.
+			for (let attempt = 0; attempt < 100; attempt += 1) {
+				try {
+					const reopened = await openFake(dir, dbPath);
+					await closeAgent(reopened.session, context);
+					return;
+				} catch {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			}
+			throw new Error("o lock não foi liberado depois do fechamento");
 		});
 	});
 

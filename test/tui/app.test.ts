@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +10,10 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 } from "@earendil-works/pi-ai";
-import type {
-	ProgramStatus,
-	Terminal,
+import {
+	TuiMainScreen,
+	type ProgramStatus,
+	type Terminal,
 } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
@@ -683,6 +684,14 @@ describe("TUI", () => {
 
 			release?.();
 			await waitFor(() => terminal.text.includes("sessão "), "troca publicada");
+			// O shell abandonado não pode continuar ocupando o slot da TUI.
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			terminal.send("!echo depois-da-troca");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("depois-da-troca"),
+				"novo shell aceito",
+			);
 			terminal.send("/quit");
 			terminal.send("\r");
 			await expect(running).resolves.toEqual({ code: 0 });
@@ -733,6 +742,142 @@ describe("TUI", () => {
 				await expect(running).resolves.toEqual({ code: 0 });
 			});
 			// Dá tempo de uma rejeição solta chegar ao processo.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
+	it("troca é recusada enquanto uma geração retomada trabalha", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-resumed-"));
+		await mkdir(dir, { recursive: true });
+		expect(await crashChild(dir, "crash-admitted")).toBe("SIGKILL");
+
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let started = false;
+		faux.setResponses([
+			async () => {
+				started = true;
+				await gate;
+				return fauxAssistantMessage("resposta retomada");
+			},
+		]);
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "s1.sqlite"),
+				cwd: process.cwd(),
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		let opened = 0;
+		const switcher = {
+			list: () => listSessions(dir),
+			open: () => {
+				opened += 1;
+				return Promise.reject(new Error("não deveria abrir"));
+			},
+			create: () => {
+				opened += 1;
+				return Promise.reject(new Error("não deveria abrir"));
+			},
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: handle,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => started, "geração retomada iniciou");
+			await waitFor(
+				() => terminal.text.includes("gerando"),
+				"status de geração",
+			);
+
+			terminal.send("/new");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("aguarde a geração"),
+				"troca recusada",
+			);
+			expect(opened).toBe(0);
+
+			release();
+			await waitFor(() => terminal.text.includes("ocioso"), "turno terminou");
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+		} finally {
+			await closeAgent(handle, context);
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	it("OSC/CSI na resposta do modelo chega ao terminal como texto", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-escape-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		faux.setResponses([
+			fauxAssistantMessage("perigo\u001b]0;t\u0007\u001b[2Jfim"),
+		]);
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "session.sqlite"),
+				cwd: dir,
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+			terminal.send("oi");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("perigo"), "resposta");
+			expect(terminal.text).not.toContain("\u001b]0;t");
+			expect(terminal.text).not.toContain("\u001b[2Jfim");
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+		} finally {
+			await closeAgent(handle, context);
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("Ctrl+C ocioso com terminal quebrado resolve a saída, sem rejeição solta", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			await withFake(async ({ terminal, handle }) => {
+				const tui = new TuiMainScreen(terminal);
+				tui.stop = () => {
+					throw new Error("terminal quebrado");
+				};
+				const running = runTui({ session: handle, context, terminal, tui });
+				await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+				terminal.send("\u0003");
+				await expect(running).resolves.toEqual({ code: 1 });
+			});
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(unhandled).toEqual([]);
 		} finally {

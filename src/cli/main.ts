@@ -85,7 +85,7 @@ export async function main(
 	const hint = (): void => {
 		if (hinted || sessionId === undefined || ephemeral) return;
 		hinted = true;
-		writeResumeHint(sessionId);
+		writeResumeHint(sessionId, dir);
 	};
 
 	try {
@@ -216,10 +216,11 @@ export async function main(
  * Recuperação exige reabrir a mesma sessão: sem `--session`/`-c` a próxima
  * execução cria outro arquivo e não vê a intenção pendente.
  */
-function writeResumeHint(sessionId: string | undefined): void {
+function writeResumeHint(sessionId: string | undefined, dir: string): void {
 	if (sessionId === undefined) return;
 	process.stderr.write(
-		`sessão: ${sessionId} — retome com durable-pi --session ${sessionId} ...\n`,
+		`sessão: ${sessionId} — retome com durable-pi --session ${sessionId} ...\n` +
+			`diretório: ${dir} — use --session-dir para reabrir o mesmo banco\n`,
 	);
 }
 

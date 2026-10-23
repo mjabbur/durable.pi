@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { link, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,6 +45,19 @@ describe("acquireStorageLock", () => {
 				/em uso por outro processo/,
 			);
 			await lock.release();
+		});
+	});
+
+	it("recusa symlink e hardlink: o lock não distingue os nomes", async () => {
+		await withDb(async (dbPath) => {
+			await writeFile(dbPath, "");
+			const alias = `${dbPath}.alias`;
+			await symlink(dbPath, alias);
+			await expect(acquireStorageLock(alias)).rejects.toThrow(/symlink/);
+
+			const hard = `${dbPath}.hard`;
+			await link(dbPath, hard);
+			await expect(acquireStorageLock(hard)).rejects.toThrow(/hardlink/);
 		});
 	});
 
