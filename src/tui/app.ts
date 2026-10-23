@@ -165,6 +165,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			// pendurada por causa da limpeza.
 			try {
 				tui.stop();
+			} catch (error) {
+				process.stderr.write(`falha ao parar o terminal: ${describe(error)}\n`);
+				if (exitCode === 0) exitCode = 1;
 			} finally {
 				resolveExit({ code: exitCode });
 			}
@@ -223,6 +226,13 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			process.stderr.write(
 				`!${active.command}: desfecho não gravado (${describe(error)})\n`,
 			);
+		} finally {
+			// A execução abandonada não pode continuar sendo a shell ativa da TUI:
+			// `interrupted` já impede commit tardio, mas o slot precisa liberar.
+			if (shell === active) {
+				shell = undefined;
+				render();
+			}
 		}
 	}
 
@@ -230,7 +240,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		for (const child of [...transcript.children]) transcript.removeChild(child);
 		for (const component of componentsOf(state)) transcript.addChild(component);
 		for (const text of notices) {
-			transcript.addChild(new Text(theme.dim(`· ${text}`), 1, 0));
+			transcript.addChild(
+				new Text(theme.dim(`· ${sanitizeForTerminal(text)}`), 1, 0),
+			);
 		}
 		status.setText(statusLine());
 		tui.requestRender();
@@ -436,8 +448,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			return;
 		}
 		// Trocar de banco no meio da geração perderia o turno: o Harness antigo
-		// fecha com a submissão em voo e ninguém mais a acompanha.
-		if (turn !== undefined) {
+		// fecha com a submissão em voo e ninguém mais a acompanha. Geração
+		// retomada não tem `turn` local: o snapshot é a fonte.
+		if (turn !== undefined || state.running || abortingRun) {
 			notify("aguarde a geração terminar antes de trocar de sessão");
 			return;
 		}
@@ -679,7 +692,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				});
 			return { consume: true };
 		}
-		void finish(exitCode);
+		void finish(exitCode).catch(reportCommandError);
 		return { consume: true };
 	});
 
@@ -741,7 +754,7 @@ function componentOf(block: TranscriptBlock): Component {
 			return toolComponent(block);
 		case "shell": {
 			const marker = block.exitCode === 0 ? "✓" : "✗";
-			const head = `${marker} ${theme.bold(`!${block.command}`)}`;
+			const head = `${marker} ${theme.bold(`!${sanitizeForTerminal(block.command)}`)}`;
 			const tail = sanitizeForTerminal(block.output)
 				.trimEnd()
 				.split("\n")
@@ -759,8 +772,12 @@ function componentOf(block: TranscriptBlock): Component {
 }
 
 function assistantComponent(text: string, thinking: string): Component {
+	const safeText = sanitizeForTerminal(text);
+	const safeThinking = sanitizeForTerminal(thinking);
 	return new Markdown(
-		thinking === "" ? text : `${theme.dim(thinking)}\n\n${text}`,
+		safeThinking === ""
+			? safeText
+			: `${theme.dim(safeThinking)}\n\n${safeText}`,
 		1,
 		0,
 		markdownTheme,
@@ -776,7 +793,7 @@ function toolComponent(
 ): Component {
 	const marker =
 		block.status === "running" ? "…" : block.status === "error" ? "✗" : "✓";
-	const head = `${marker} ${block.name}`;
+	const head = `${marker} ${sanitizeForTerminal(block.name)}`;
 	const tail = sanitizeForTerminal(block.output)
 		.trimEnd()
 		.split("\n")

@@ -103,8 +103,20 @@ export async function runShell(
 	return run;
 }
 
+/**
+ * Corta mantendo o tamanho total em `MAX_SHELL_OUTPUT` unidades UTF-16 e sem
+ * começar no meio de um par surrogate (o registro precisa continuar válido).
+ */
 function clip(text: string): string {
 	return text.length <= MAX_SHELL_OUTPUT
 		? text
-		: `…${text.slice(-MAX_SHELL_OUTPUT)}`;
+		: `…${tail(text, MAX_SHELL_OUTPUT - 1)}`;
+}
+
+/** Cauda sem começar na segunda metade de um par surrogate. */
+function tail(text: string, size: number): string {
+	let start = Math.max(0, text.length - size);
+	const code = text.charCodeAt(start);
+	if (start > 0 && code >= 0xdc00 && code <= 0xdfff) start += 1;
+	return text.slice(start);
 }

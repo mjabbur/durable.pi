@@ -182,10 +182,9 @@ function applyEvent(state: Transcript, event: AgentEvent): Transcript {
 					: message?.isError === true
 						? "error"
 						: "done";
-			const output =
-				block !== undefined && block.output !== ""
-					? block.output
-					: (message?.text ?? "");
+			// O resultado comprometido vence o progresso: um "executando" antigo
+			// não pode esconder o erro/diagnóstico final.
+			const output = message?.text ?? (block?.output ?? "");
 			const type = upsertTool(state, {
 				kind: "tool",
 				callId: event.toolCallId,
@@ -327,9 +326,11 @@ function applyToolOutput(
 }
 
 function clip(text: string): string {
-	return text.length <= MAX_TOOL_OUTPUT
-		? text
-		: `…${text.slice(-MAX_TOOL_OUTPUT)}`;
+	if (text.length <= MAX_TOOL_OUTPUT) return text;
+	let start = text.length - (MAX_TOOL_OUTPUT - 1);
+	const code = text.charCodeAt(start);
+	if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+	return `…${text.slice(start)}`;
 }
 
 function partsFromMessage(message: Message | undefined): PartialBlock[] {

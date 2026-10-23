@@ -28,6 +28,10 @@ resolveu (e que a troca de sessão atualiza).
 4. `--no-session` não escreve dica (o banco efêmero é removido).
 5. Modo impresso mantém a dica nos caminhos de falha, sem duplicar.
 6. Erro de uso (código 2) não escreve dica.
+6a. A dica inclui o diretório efetivo (`diretório: <dir> — use --session-dir`),
+    porque só o id não reabre o mesmo banco.
+
+
 7. Falha no `finally` (fechar a sessão ou remover o diretório efêmero)
    rebaixa o código para 1 e a dica usa o id corrente.
 

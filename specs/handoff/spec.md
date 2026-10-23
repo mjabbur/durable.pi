@@ -38,6 +38,9 @@ Invariantes numeradas:
    adjacência.
 5. O mesmo `requestId` explícito devolve a mesma submissão, também depois de
    fechar e reabrir o agente no mesmo arquivo.
+5a. No máximo `MAX_PENDING` (8) intenções pendentes. Ao atingir o limite, um
+    pedido novo é recusado **antes** de gravar; nenhuma intenção antiga é
+    descartada, porque pode estar admitida e sem desfecho.
 6. `watch()` limpa a intenção pendente. Depois de um `watch()` concluído, um
    `submit()` sem id explícito e com o mesmo prompt cria uma submissão nova
    (`submission.id` diferente).

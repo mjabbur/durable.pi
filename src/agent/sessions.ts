@@ -55,6 +55,15 @@ export async function ensureSessionDir(dir: string): Promise<void> {
  * Sessões em disco, mais recente primeiro. Só arquivo regular `.sqlite`.
  * Diretório ausente é lista vazia; qualquer outro erro sobe.
  */
+async function statIfPresent(path: string) {
+	try {
+		return await stat(path);
+	} catch (error) {
+		if (isErrno(error, "ENOENT")) return undefined;
+		throw error;
+	}
+}
+
 export async function listSessions(dir: string): Promise<SessionInfo[]> {
 	let names: string[];
 	try {
@@ -69,11 +78,11 @@ export async function listSessions(dir: string): Promise<SessionInfo[]> {
 		const id = name.slice(0, -".sqlite".length);
 		if (!ID_PATTERN.test(id)) continue;
 		const path = join(dir, name);
-		const info = await stat(path).catch(() => undefined);
+		const info = await statIfPresent(path);
 		if (info === undefined || !info.isFile()) continue;
 		// Commits recentes podem estar só no WAL até o checkpoint: a atividade
 		// da sessão é o mais novo entre banco e WAL.
-		const wal = await stat(`${path}-wal`).catch(() => undefined);
+		const wal = await statIfPresent(`${path}-wal`);
 		const modifiedAt = Math.max(info.mtimeMs, wal?.mtimeMs ?? 0);
 		sessions.push({ id, path, modifiedAt });
 	}

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 import type { Context } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+	awaitWithContext,
+	BACKGROUND_CONTEXT,
+} from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
@@ -207,18 +210,29 @@ export async function submit(
 	const id = await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
 		if (requestId !== undefined) {
-			if (!control.pending.some((intent) => intent.requestId === requestId)) {
-				control.pending.push({ requestId, prompt });
-				trimPending(control.pending);
+			const existing = control.pending.find(
+				(intent) => intent.requestId === requestId,
+			);
+			if (existing !== undefined) {
+				// O mesmo id não pode trocar de intenção: devolver sucesso aqui
+				// admitiria o prompt errado como se este tivesse entrado.
+				if (existing.prompt !== prompt) {
+					throw new Error(
+						`requestId ${requestId} já pertence a outro prompt`,
+					);
+				}
+				return requestId;
 			}
+			requirePendingRoom(control.pending);
+			control.pending.push({ requestId, prompt });
 			return requestId;
 		}
 
 		const same = control.pending.find((intent) => intent.prompt === prompt);
 		if (same !== undefined) return same.requestId;
 
+		requirePendingRoom(control.pending);
 		control.pending.push({ requestId: candidate, prompt });
-		trimPending(control.pending);
 		return candidate;
 	}, context);
 
@@ -327,15 +341,22 @@ export async function ask(
 	return watch(session, submission, context);
 }
 
+/**
+ * Fecha o Harness e só então libera o lock. A limpeza não herda o cancelamento
+ * do chamador: `awaitWithContext` cancela apenas a espera. Se o chamador
+ * desistir, o lock continua com a limpeza em andamento até ela terminar — outro
+ * processo não pode abrir o banco enquanto invocações/commits ainda drenam.
+ */
 export async function closeAgent(
 	session: AgentSession,
 	context: Context,
 ): Promise<void> {
-	try {
-		await session.harness.close(context);
-	} finally {
-		await session.lock.release();
-	}
+	const closing = session.harness
+		.close(BACKGROUND_CONTEXT)
+		.finally(() => session.lock.release());
+	// A espera pode ser cancelada; a continuação acima já tem tratamento.
+	closing.catch(() => undefined);
+	await awaitWithContext(closing, context);
 }
 
 /**
@@ -368,10 +389,17 @@ async function forgetPending(
 }
 
 /** Texto da resposta final; pensamento e tool calls ficam de fora. */
-/** Mantém as intenções mais recentes; as antigas já não têm como ser reenviadas. */
-function trimPending(pending: PendingIntent[]): void {
-	if (pending.length > MAX_PENDING) {
-		pending.splice(0, pending.length - MAX_PENDING);
+/**
+ * Sem espaço, recusa a nova intenção **antes** de gravar. Expulsar a mais
+ * antiga perderia a recuperação de um pedido que pode estar admitido e sem
+ * desfecho; o cliente precisa reabrir e retomar antes de pedir mais.
+ */
+function requirePendingRoom(pending: readonly PendingIntent[]): void {
+	if (pending.length >= MAX_PENDING) {
+		throw new Error(
+			`${pending.length} intenções pendentes (limite ${MAX_PENDING}); ` +
+				"reabra a sessão e retome antes de enviar outro pedido",
+		);
 	}
 }
 

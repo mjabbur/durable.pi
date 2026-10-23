@@ -177,12 +177,13 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 
 ## Pendências
 
-- Sobras da auditoria do M1.1 (médias/baixas, em `docs/audits/2026-10-22-m1-1.md`):
-  `/quit`/`/new` com `!comando` em execução perde o registro; falha de `attach`
-  na troca apaga o próprio aviso; reducer ignora `text_start`/`block`/`message`
-  e o slot `done` do snapshot sobrescreve resultado lido; `void command()` sem
-  `catch`; saída externa sem sanitizar ANSI/OSC; falha de storage na TUI não
-  imprime `sessão: <id>`; `parseModelRef` aceita partes em branco.
+- Auditoria de 2026-10-23 (`docs/audits/2026-10-23-{core,cli-tui,tests}.md`):
+  médias fechadas. Em aberto e priorizadas: watchdog de encerramento com
+  provedor que ignora cancelamento; Ctrl+C antes da admissão; `resumePendingIntents`
+  perde a associação implícita; limpeza de segredos no `run.sh`; ciclo de vida
+  `attach`/`start`; picker tardio; falha ao fechar a sessão anterior; testes de
+  crash da janela intenção → admissão; `setsid` como pré-requisito; higiene do
+  descendente; fixtures `.mjs` no lint.
 - Push a partir do container (M3): sem credencial dentro; push no host.
 - Gate de `test/spec/` no CI: decidir como distinguir correção de spec de teste
   acomodado (duas perguntas antigas continuam válidas).
