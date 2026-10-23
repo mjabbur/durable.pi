@@ -11,10 +11,12 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 
+import { Control } from "../../src/agent/control.js";
 import {
 	ask,
 	closeAgent,
 	openAgent,
+	resumePendingIntents,
 	submit,
 	watch,
 } from "../../src/agent/harness.js";
@@ -272,6 +274,37 @@ describe("openAgent", () => {
 
 			expect(outcome.status).toBe("unanswered");
 			expect(outcome.reason).toBeDefined();
+			await closeAgent(session, context);
+		});
+	});
+});
+
+describe("resumePendingIntents", () => {
+	it("reenvia intenção gravada antes da admissão e limpa a fila", async () => {
+		await withDir(async (dir, dbPath) => {
+			const { session, faux } = await openFake(dir, dbPath);
+			faux.setResponses([fauxAssistantMessage("retomado")]);
+			// Janela entre o commit da intenção e `conversation.submit()`: o crash
+			// aqui deixa o pedido no doc e nenhuma submissão no harness.
+			await session.conversation.commit(async (tx) => {
+				const control = await tx.doc(Control, session.conversation.id);
+				control.pending.push({ requestId: "rec-1", prompt: "pedido antigo" });
+			}, context);
+
+			expect(await resumePendingIntents(session, context)).toBe(1);
+			// A intenção já foi admitida: um segundo reenvio não duplica input.
+			expect(await resumePendingIntents(session, context)).toBe(0);
+
+			session.harness.resume();
+			await session.harness.waitForIdle(context);
+
+			const view = await session.conversation.context(context);
+			const usuarios = view.entries.filter((entry) => entry.kind === "pi.user");
+			expect(usuarios).toHaveLength(1);
+			expect(JSON.stringify(usuarios[0]?.model)).toContain("pedido antigo");
+			expect(
+				view.entries.some((entry) => entry.kind === "pi.assistant"),
+			).toBe(true);
 			await closeAgent(session, context);
 		});
 	});

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Context } from "@earendil-works/chord";
 import { withCancel } from "@earendil-works/chord/context";
 import type { AgentEventStream, Submission } from "@earendil-works/pi-durable";
@@ -18,7 +20,12 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 
-import { submit, watch, type AgentSession } from "../agent/harness.js";
+import {
+	resumePendingIntents,
+	submit,
+	watch,
+	type AgentSession,
+} from "../agent/harness.js";
 import {
 	isThinkingLevel,
 	parseModelRef,
@@ -64,6 +71,16 @@ export type TuiExit = {
 };
 
 /**
+ * Geração em voo. Reservada antes do primeiro `await` para que duas entradas
+ * seguidas não atravessem a guarda; `aborting` mantém o estado até o desfecho.
+ */
+type Turn = {
+	readonly requestId: string;
+	submission?: Submission;
+	aborting?: boolean;
+};
+
+/**
  * TUI do M1: transcript com streaming, editor e abort por `Ctrl+C`.
  *
  * O desenho segue o `watchEvents`: cada lote de eventos redesenha o transcript
@@ -82,7 +99,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	let attachment = 0;
 
 	let state: Transcript = fromSnapshot(emptySnapshot());
-	let busy: Submission | undefined;
+	let turn: Turn | undefined;
+	/** Aborto de geração que não é um `ask()` desta TUI (retomada no attach). */
+	let abortingRun = false;
 	/** `!comando` em execução: `Ctrl+C` cancela o processo filho. */
 	let shell: { readonly cancel: () => void } | undefined;
 	let exited = false;
@@ -128,12 +147,18 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	}
 
 	function statusLine(): string {
-		const turn =
-			busy !== undefined ? "gerando" : shell !== undefined ? "shell" : "ocioso";
+		const turnLabel =
+			turn?.aborting === true || abortingRun
+				? "cancelando"
+				: turn !== undefined || state.running
+					? "gerando"
+					: shell !== undefined
+						? "shell"
+						: "ocioso";
 		const queue = state.queued > 0 ? ` · fila ${state.queued}` : "";
 		const thinking = thinkingLevel === "off" ? "" : ` · ${thinkingLevel}`;
 		return theme.dim(
-			`${modelLabel}${thinking} · ${turn} · ${state.tokens} tokens${queue}`,
+			`${modelLabel}${thinking} · ${turnLabel} · ${state.tokens} tokens${queue}`,
 		);
 	}
 
@@ -185,20 +210,44 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		});
 
 		await refreshAgent();
+		// Observar não liga o scheduler: sem `resume()`, uma submissão colocada
+		// ou uma task de geração viva fica parada e a tela mente "ocioso".
+		next.harness.resume();
+		try {
+			const resumed = await resumePendingIntents(next, context);
+			if (resumed > 0) {
+				notices.push(
+					resumed === 1
+						? "1 pedido pendente retomado"
+						: `${resumed} pedidos pendentes retomados`,
+				);
+			}
+		} catch (error) {
+			notify(`falha ao retomar pedidos pendentes: ${describe(error)}`);
+		}
 		if (label !== undefined) notices.push(label);
 		render();
 	}
 
 	async function ask(prompt: string): Promise<void> {
-		if (busy !== undefined) {
+		if (turn !== undefined) {
 			notify("já existe uma geração em andamento");
 			return;
 		}
 		const session = current;
+		// Reserva síncrona: o `await` da admissão não pode abrir a janela em que
+		// uma segunda entrada passa pela guarda.
+		const mine: Turn = { requestId: randomUUID() };
+		turn = mine;
+		render();
 		try {
-			const submission = await submit(session, prompt, context);
-			busy = submission;
-			render();
+			const submission = await submit(
+				session,
+				prompt,
+				context,
+				mine.requestId,
+			);
+			mine.submission = submission;
 			const outcome = await watch(session, submission, context);
 			if (outcome.status === "unanswered") {
 				notify(`sem resposta: ${outcome.reason ?? "motivo desconhecido"}`);
@@ -206,8 +255,12 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		} catch (error) {
 			notify(`falha na submissão: ${describe(error)}`);
 		} finally {
-			busy = undefined;
-			render();
+			// Só limpa o turno que ainda é o atual: um `finally` atrasado não pode
+			// apagar o estado de uma geração posterior.
+			if (turn === mine) {
+				turn = undefined;
+				render();
+			}
 		}
 	}
 
@@ -245,6 +298,12 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	): Promise<void> {
 		if (sessions === undefined) {
 			notify("sessão efêmera (--no-session): /new e /resume indisponíveis");
+			return;
+		}
+		// Trocar de banco no meio da geração perderia o turno: o Harness antigo
+		// fecha com a submissão em voo e ninguém mais a acompanha.
+		if (turn !== undefined) {
+			notify("aguarde a geração terminar antes de trocar de sessão");
 			return;
 		}
 		const previous = current;
@@ -378,20 +437,48 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 
 	tui.addInputListener((data) => {
 		if (!matchesKey(data, "ctrl+c")) return undefined;
-		// Primeiro `Ctrl+C` aborta o que está rodando (geração ou `!comando`);
-		// o segundo, sem nada em voo, sai.
-		if (busy !== undefined) {
-			const submission = busy;
-			busy = undefined;
+		// Primeiro `Ctrl+C` aborta a geração, via `conversation.abort()`; o
+		// segundo sai só quando não há nada em voo. `Submission.abort()` não serve:
+		// ele só retira o que está na fila e devolve `already_placed`.
+		if (turn !== undefined) {
+			if (turn.aborting === true) {
+				notify("cancelando — aguarde o turno terminar");
+				return { consume: true };
+			}
+			turn.aborting = true;
 			render();
-			void submission
-				.abort(context)
-				.catch((error: unknown) => notify(describe(error)));
+			const mine = turn;
+			void current.conversation.abort(context).catch((error: unknown) => {
+				// O turno pode ter terminado enquanto o aborto falhava: não limpe o
+				// estado de outro turno, que já tem a própria reserva.
+				if (turn !== mine) return;
+				mine.aborting = false;
+				notify(`falha ao cancelar: ${describe(error)}`);
+				render();
+			});
 			return { consume: true };
 		}
 		if (shell !== undefined) {
 			shell.cancel();
 			notify("cancelando o comando");
+			return { consume: true };
+		}
+		// Geração que veio da retomada (submissão que não é deste `ask`) também
+		// precisa de aborto explícito, senão o processo fecha com a task viva.
+		if (state.running || abortingRun) {
+			if (abortingRun) {
+				notify("cancelando — aguarde o turno terminar");
+				return { consume: true };
+			}
+			abortingRun = true;
+			render();
+			void current.conversation
+				.abort(context)
+				.catch((error: unknown) => notify(`falha ao cancelar: ${describe(error)}`))
+				.finally(() => {
+					abortingRun = false;
+					render();
+				});
 			return { consume: true };
 		}
 		finish(exitCode);

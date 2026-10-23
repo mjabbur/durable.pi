@@ -3,7 +3,7 @@
 // processo Node separado para que SIGKILL seja real e importa `dist/`, o mesmo
 // artefato que a imagem executa (`npm run build` roda no `pretest`).
 //
-// uso: node main-child.mjs <crash|crash-after-tool|resume|count> <sessionDir> <sessionId> <prompt>
+// uso: node main-child.mjs <crash|crash-admitted|crash-after-tool|resume|count> <sessionDir> <sessionId> <prompt>
 import { join } from "node:path";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -14,13 +14,18 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 
-import { closeAgent, openAgent } from "../../dist/agent/harness.js";
+import { Control } from "../../dist/agent/control.js";
+import {
+	closeAgent,
+	openAgent,
+	submit,
+} from "../../dist/agent/harness.js";
 import { main } from "../../dist/cli/main.js";
 
 const [mode, dir, sessionId, prompt] = process.argv.slice(2);
 if (!mode || !dir || !sessionId || !prompt) {
 	throw new Error(
-		"uso: main-child.mjs <crash|crash-after-tool|resume|count> <sessionDir> <sessionId> <prompt>",
+		"uso: main-child.mjs <crash|crash-admitted|crash-after-tool|resume|count> <sessionDir> <sessionId> <prompt>",
 	);
 }
 
@@ -59,6 +64,32 @@ if (mode === "count") {
 		}),
 	);
 	await closeAgent(session, BACKGROUND_CONTEXT);
+} else if (mode === "crash-admitted") {
+	// Submissão colocada e intenção já limpa: reabrir só conclui se o attach
+	// ligar o scheduler com `harness.resume()`. A limpeza acontece antes do
+	// kill para isolar essa janela da reconciliação de intenções.
+	let release = () => undefined;
+	const gate = new Promise((resolve) => {
+		release = resolve;
+	});
+	faux.setResponses([
+		async () => {
+			await gate;
+			process.kill(process.pid, "SIGKILL");
+			return fauxAssistantMessage("inalcançável");
+		},
+	]);
+	const session = await openAgent(
+		{ dbPath: join(dir, `${sessionId}.sqlite`), cwd: process.cwd(), model, models },
+		BACKGROUND_CONTEXT,
+	);
+	await submit(session, prompt, BACKGROUND_CONTEXT);
+	await session.conversation.commit(async (tx) => {
+		const control = await tx.doc(Control, session.conversation.id);
+		control.pending = [];
+	}, BACKGROUND_CONTEXT);
+	release();
+	await new Promise(() => undefined);
 } else {
 	if (mode === "crash") {
 		// Morre dentro da requisição ao modelo, depois de o input ser admitido e
