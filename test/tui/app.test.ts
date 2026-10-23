@@ -223,6 +223,46 @@ describe("TUI", () => {
 		}
 	});
 
+	it("saída de shell com ANSI/OSC chega ao terminal como texto", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-"));
+		const dbPath = join(dir, "session.sqlite");
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const openFake = async (): Promise<Awaited<ReturnType<typeof openAgent>>> =>
+			openAgent(
+				{
+					dbPath,
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+
+		try {
+			const handle = await openFake();
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			// ESC[2J limparia a tela; ESC]0;t trocaria o título.
+			terminal.send("!printf 'a\\033[2Jb\\033]0;t\\007c'");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("abc"), "saída filtrada");
+			expect(terminal.text).not.toContain("a\u001b[2Jb");
+			expect(terminal.text).not.toContain("\u001b]0;t");
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(handle, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("/model e /thinking passam pelo configure() do agente", async () => {
 		await withFake(async ({ terminal, handle }) => {
 			const running = runTui({ session: handle, context, terminal });

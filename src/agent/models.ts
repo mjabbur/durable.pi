@@ -39,14 +39,19 @@ export class InvalidModelRefError extends Error {
 	}
 }
 
-/** `provider/modelo`: o primeiro `/` separa, o resto pertence ao id do modelo. */
+/**
+ * `provider/modelo`: o primeiro `/` separa, o resto pertence ao id do modelo.
+ * Partes só com espaços são erro de formato, não de catálogo.
+ */
 export function parseModelRef(text: string): ModelRef {
 	const slash = text.indexOf("/");
 	if (slash <= 0 || slash === text.length - 1) {
 		throw new InvalidModelRefError(text);
 	}
-	return {
-		provider: text.slice(0, slash),
-		modelId: text.slice(slash + 1),
-	};
+	const provider = text.slice(0, slash).trim();
+	const modelId = text.slice(slash + 1).trim();
+	if (provider === "" || modelId === "") {
+		throw new InvalidModelRefError(text);
+	}
+	return { provider, modelId };
 }
