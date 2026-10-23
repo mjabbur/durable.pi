@@ -692,6 +692,54 @@ describe("TUI", () => {
 		}
 	}, 30_000);
 
+	it("rejeição de comando vira aviso, sem unhandledRejection, e a TUI segue", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			await withFake(async ({ terminal, handle }) => {
+				const switcher = {
+					list: (): Promise<never> => Promise.reject(new Error("list-falhou")),
+					open: (): Promise<never> => Promise.reject(new Error("open-falhou")),
+					create: (): Promise<never> => Promise.reject(new Error("open-falhou")),
+				};
+				const running = runTui({
+					session: handle,
+					context,
+					terminal,
+					sessions: switcher,
+				});
+				await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+				terminal.send("/resume");
+				terminal.send("\r");
+				await waitFor(
+					() => terminal.text.includes("list-falhou"),
+					"aviso da listagem",
+				);
+
+				// A TUI continua utilizável: o turno seguinte é admitido de verdade.
+				terminal.send("pergunta depois da falha");
+				terminal.send("\r");
+				await waitFor(
+					() => terminal.text.includes("resposta final"),
+					"prompt aceito",
+				);
+
+				terminal.send("/quit");
+				terminal.send("\r");
+				await expect(running).resolves.toEqual({ code: 0 });
+			});
+			// Dá tempo de uma rejeição solta chegar ao processo.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+
 	it("/resume sem argumento abre o seletor e troca no Enter", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "durable-tui-picker-"));
 		const open = async (id: string) => {
