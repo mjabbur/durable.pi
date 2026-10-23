@@ -24,8 +24,9 @@ Nenhum: função pura.
 2. Espaços nas pontas de cada parte são removidos: `" p/m "` vira `p`/`m`.
 3. Parte só com espaços (ou vazia) rejeita com `InvalidModelRefError`.
 4. Sem `/` rejeita com `InvalidModelRefError`.
-5. Texto que começa ou termina com `/` rejeita com `InvalidModelRefError`;
-   `"a/b/"` é aceito, porque o id do modelo é `"b/"`.
+5. Parte do provider ou do modelo que fica vazia depois do trim rejeita com
+   `InvalidModelRefError`. Consequências: `"/b"` e `"a/"` rejeitam; `"a/b/"`
+   é aceito, porque o id do modelo é `"b/"` (só a primeira barra separa).
 6. O primeiro `/` separa; o resto pertence ao id: `"a/b/c"` vira `a`/`b/c`.
 7. Não valida catálogo: qualquer par não vazio é aceito.
 
