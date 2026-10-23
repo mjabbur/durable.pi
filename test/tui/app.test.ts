@@ -551,6 +551,258 @@ describe("TUI", () => {
 		}
 	}, 20_000);
 
+	it("/quit espera o desfecho do !comando e ignora entrada no meio", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-shutdown-"));
+		const dbPath = join(dir, "session.sqlite");
+		const open = async () => {
+			const provider = fauxProvider();
+			const catalog = createModels();
+			catalog.setProvider(provider.provider);
+			const ref = provider.getModel();
+			provider.setResponses([fauxAssistantMessage("não usado")]);
+			return openAgent(
+				{
+					dbPath,
+					cwd: dir,
+					model: { provider: ref.provider, modelId: ref.id },
+					models: catalog,
+				},
+				context,
+			);
+		};
+		const handle = await open();
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolveGate) => {
+			release = resolveGate;
+		});
+		let configures = 0;
+		const configure = handle.conversation.configure.bind(
+			handle.conversation,
+		);
+		handle.conversation.configure = (async (
+			change: Parameters<typeof configure>[0],
+			ctx: Parameters<typeof configure>[1],
+		) => {
+			configures += 1;
+			return configure(change, ctx);
+		});
+		const original = handle.conversation.submit.bind(handle.conversation);
+		let writes = 0;
+		handle.conversation.submit = (async (
+			draft: Parameters<typeof original>[0],
+			ctx: Parameters<typeof original>[1],
+		) => {
+			if (draft.type === "write") {
+				writes += 1;
+				await gate;
+			}
+			return original(draft, ctx);
+		});
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			const modeloAntes = (await handle.conversation.agent(context)).model;
+			terminal.send("!echo pronto");
+			terminal.send("\r");
+			await waitFor(() => writes === 1, "desfecho do shell pendente");
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			// Item 9: com o fechamento pedido, nada novo pode começar.
+			terminal.send("!echo depois");
+			terminal.send("\r");
+			terminal.send("prompt tardio");
+			terminal.send("\r");
+			terminal.send("/model outro/modelo");
+			terminal.send("\r");
+
+			let resolved = false;
+			void running.then(() => {
+				resolved = true;
+			});
+			await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+			// Item 2: a saída não resolve antes de o desfecho ser gravado.
+			expect(resolved).toBe(false);
+			expect(configures).toBe(0);
+
+			release();
+			await expect(running).resolves.toEqual({ code: 0 });
+			// Item 2: a saída só resolveu depois do commit; confira na sessão
+			// ainda aberta, sem a drenagem do close esconder uma resolução precoce.
+			const durável = await handle.conversation.context(context);
+			expect(
+				durável.entries.filter((entry) => entry.kind === "durable.shell"),
+			).toHaveLength(1);
+			await closeAgent(handle, context);
+
+			const reopened = await open();
+			try {
+				const view = await reopened.conversation.context(context);
+				const shells = view.entries.filter(
+					(entry) => entry.kind === "durable.shell",
+				);
+				expect(shells).toHaveLength(1);
+				expect(shells[0]?.data).toMatchObject({
+					exitCode: 0,
+					aborted: false,
+				});
+				expect(
+					view.entries.filter((entry) => entry.kind === "pi.user"),
+				).toHaveLength(0);
+				// Item 9: comando que muda configuração também não roda no fechamento.
+				expect((await reopened.conversation.agent(context)).model).toEqual(
+					modeloAntes,
+				);
+			} finally {
+				await closeAgent(reopened, context);
+			}
+		} finally {
+			release();
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	it("commit lento do desfecho não é classificado como interrupção", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-slow-commit-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "session.sqlite"),
+				cwd: dir,
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolveGate) => {
+			release = resolveGate;
+		});
+		const original = handle.conversation.submit.bind(handle.conversation);
+		let writes = 0;
+		handle.conversation.submit = (async (
+			draft: Parameters<typeof original>[0],
+			ctx: Parameters<typeof original>[1],
+		) => {
+			// Só a primeira escrita atrasa: o fallback de interrupção precisa
+			// poder admitir a dele enquanto o commit normal está preso.
+			if (draft.type === "write") {
+				writes += 1;
+				if (writes === 1) await gate;
+			}
+			return original(draft, ctx);
+		});
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("!echo devagar");
+			terminal.send("\r");
+			await waitFor(() => writes === 1, "commit do desfecho pendente");
+
+			terminal.send("/quit");
+			terminal.send("\r");
+			// A execução já terminou; o commit passa do prazo de 3 s do processo.
+			await new Promise((resolveWait) => setTimeout(resolveWait, 3_500));
+			release();
+			await expect(running).resolves.toEqual({ code: 0 });
+
+			const view = await handle.conversation.context(context);
+			const shells = view.entries.filter(
+				(entry) => entry.kind === "durable.shell",
+			);
+			expect(shells).toHaveLength(1);
+			expect(shells[0]?.data).toMatchObject({
+				exitCode: 0,
+				aborted: false,
+			});
+		} finally {
+			release();
+			await closeAgent(handle, context);
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	it("fechamento com descendente que escapou do grupo não pendura a saída", async () => {
+		const hasSetsid = await new Promise<boolean>((resolveCheck) => {
+			spawn("sh", ["-c", "command -v setsid"], { stdio: "ignore" })
+				.on("error", () => resolveCheck(false))
+				.on("close", (code) => resolveCheck(code === 0));
+		});
+		if (!hasSetsid) return;
+
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-desc-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "session.sqlite"),
+				cwd: dir,
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		const marker = `eco${Date.now().toString(36)}`;
+		const kill = () => {
+			spawn("pkill", ["-f", `echo ${marker}`], { stdio: "ignore" });
+		};
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			const command = `!setsid bash -c 'while :; do echo ${marker}; sleep 0.02; done' &`;
+			for (const char of command) terminal.send(char);
+			terminal.send("\r");
+			await new Promise((resolveWait) => setTimeout(resolveWait, 600));
+
+			const started = Date.now();
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			// Item 8: espera limitada, não o processo travado.
+			expect(Date.now() - started).toBeLessThan(15_000);
+			await closeAgent(handle, context);
+
+			const reopened = await openAgent(
+				{
+					dbPath: join(dir, "session.sqlite"),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+			try {
+				const view = await reopened.conversation.context(context);
+				const shells = view.entries.filter(
+					(entry) => entry.kind === "durable.shell",
+				);
+				expect(shells).toHaveLength(1);
+				// Fallback: interrupção sem desfecho, não o cancelamento normal.
+				expect(shells[0]?.data).toMatchObject({
+					aborted: true,
+					exitCode: 130,
+					output: "",
+				});
+			} finally {
+				await closeAgent(reopened, context);
+			}
+		} finally {
+			kill();
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	it("duas entradas seguidas não abrem duas gerações", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "durable-tui-guard-"));
 		const faux = fauxProvider();

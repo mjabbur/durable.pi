@@ -4,9 +4,10 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` em `dbb6a16`: TUI do M1 e correção do M1.1, 120 testes em 20 arquivos,
-  gates verdes (`typecheck`, `build`, `lint`, `test`). Árvore limpa.
-- Próximo marco: médias da auditoria do M1.1 (seção "Próximo"), não o M2.
+- `main` em `dbb6a16` + PR do shell no fechamento: 130 testes em 21 arquivos,
+  gates verdes (`typecheck`, `build`, `lint`, `test`).
+- M1.2 em andamento: item 1 (médias da auditoria) fechado com spec, teste do
+  muse e duas auditorias do Sol; restam os itens 2–7 da seção "Próximo".
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
@@ -105,6 +106,15 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   `await` e liberado só pelo dono, para duas entradas não abrirem duas gerações.
 - Troca de sessão é recusada com geração em voo: fechar o Harness antigo deixaria
   a submissão sem quem a acompanhe.
+- `!comando` no fechamento: a TUI só considera "interrompido" quando a
+  **execução** não terminou; commit lento é aguardado. Por isso `executeShell` e
+  `commitShell` são separados. As duas escritas (normal e interrupção) usam o
+  mesmo `requestId`, então no máximo uma entrada existe.
+- Fechamento nunca fica pendurado em processo que não morre: prazo de 3 s,
+  entrada de interrupção sem desfecho e `process.exit` de segurança no shim
+  (1 s, `unref`) para descendente que mantém o pipe aberto.
+- Comando local (`!`) continua sem intenção durável: exceção declarada ao
+  `AGENTS.md`, registrada em `specs/shell-shutdown/spec.md`.
 - Troca de sessão é do `main()`, não da TUI: `runTui` recebe um `SessionSwitcher`
   (`list`/`open`/`create`) e só pede. A troca abre a sessão nova antes de fechar
   a anterior — lock é por arquivo, então os dois Harnesss não disputam o mesmo
@@ -117,13 +127,12 @@ Decisão do dono em 2026-10-22: as médias vêm antes do M2. O memd foi atualiza
 nessa data (instalação de versão nova); `P-021` rev 2 está ativa com a lista.
 Ordem sugerida, cada item com teste:
 
-1. `!comando` no fechamento (ainda é buraco de durabilidade): `/quit` e `/new`
-   com shell rodando perdem o registro — confirmado com exit 0 e zero entradas
-   `durable.shell` ao reabrir. `finish()` e `switchSession()` precisam cancelar
-   ou aguardar o shell antes de soltar a sessão; se o desfecho for desconhecido,
-   gravar entrada explícita de interrupção. Teste: comando bloqueado, `/quit`,
-   liberar o filho, reabrir e exigir desfecho registrado (ou "interrompido"),
-   nunca ausência.
+1. ~~`!comando` no fechamento~~: feito em `specs/shell-shutdown/`. `finish()`
+   espera o desfecho; o prazo de 3 s cobre só o processo, e o commit lento é
+   aguardado (`executeShell` + `commitShell` separados, mesmo `requestId` nas
+   duas escritas). Descendente que escapa do grupo: entrada de interrupção e
+   saída forçada pelo shim após 1 s. Cobertura: `test/spec/shell-shutdown.test.ts`
+   (muse) + três testes manuais em `test/tui/app.test.ts`.
 2. Falha de `attach` na troca (`src/tui/app.ts`, `switchSession`): o aviso é
    apagado por `notices.length = 0` e o reattach de handle fechado é silenciado.
    Emitir o aviso depois do reattach e distinguir falha de abertura de falha
@@ -197,6 +206,11 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 - `main()` interativo só roda com TTY, então o teste de troca de sessão é na
   TUI, com terminal falso e um `SessionSwitcher` de teste; o caminho
   `main()`→`swapSession` não tem teste próprio (é cola fina sobre `openAgent`).
+- Em fechamento, não use a promise `done` (execução + commit) como sinal de
+  "processo travado": commit lento vira interrupção falsa. Espere a execução,
+  depois o commit sem prazo.
+- Teste de shutdown com escrita barrada precisa barrar só a primeira escrita;
+  senão o fallback também fica preso e o teste não distingue os caminhos.
 - `conversation.abort()` marca a task e espera a invocação em curso: com
   provedor que ignora o sinal, o status fica em "cancelando" até ele responder.
   O teste solta o provedor e só então exige idle e descarte da resposta.

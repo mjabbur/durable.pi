@@ -162,6 +162,10 @@ export async function main(
 		if (session !== undefined) {
 			try {
 				await closeAgent(session, context);
+				// A TUI pode ter resolvido a saída antes de o Harness anunciar a
+				// falha; o código de saída não pode esconder um storage quebrado.
+				const end = await session.harness.closed;
+				if (end.reason === "failed" && code === 0) code = 1;
 			} catch (error) {
 				process.stderr.write(`falha ao fechar a sessão: ${describe(error)}\n`);
 				if (code === 0) code = 1;

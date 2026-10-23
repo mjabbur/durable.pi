@@ -32,7 +32,11 @@ import {
 	THINKING_LEVELS,
 } from "../agent/models.js";
 import type { SessionInfo } from "../agent/sessions.js";
-import { runShell } from "../agent/shell.js";
+import {
+	commitShell,
+	executeShell,
+	type ShellRun,
+} from "../agent/shell.js";
 import {
 	applyEvents,
 	fromSnapshot,
@@ -102,8 +106,21 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	let turn: Turn | undefined;
 	/** Aborto de geração que não é um `ask()` desta TUI (retomada no attach). */
 	let abortingRun = false;
-	/** `!comando` em execução: `Ctrl+C` cancela o processo filho. */
-	let shell: { readonly cancel: () => void } | undefined;
+	/**
+	 * `!comando` em execução. Guarda a sessão de origem e um `requestId` por
+	 * execução: o desfecho normal e o de interrupção disputam a mesma admissão,
+	 * e um fechamento tardio nunca grava na sessão errada.
+	 */
+	type ShellState = {
+		readonly command: string;
+		readonly session: AgentSession;
+		readonly requestId: string;
+		readonly cancel: () => void;
+		readonly executed: Promise<ShellRun>;
+		interrupted: boolean;
+		done: Promise<void>;
+	};
+	let shell: ShellState | undefined;
 	let exited = false;
 	let exitCode = 0;
 	let resolveExit: (exit: TuiExit) => void = () => undefined;
@@ -128,12 +145,77 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		thinkingLevel = agent.thinkingLevel;
 	}
 
-	function finish(code: number): void {
-		if (exited) return;
+	async function finish(code: number): Promise<void> {
+		if (exited) {
+			// Falha fatal anunciada durante o fechamento tem precedência sobre 0.
+			if (code !== 0) exitCode = code;
+			return;
+		}
 		exited = true;
 		exitCode = code;
-		tui.stop();
-		resolveExit({ code });
+		try {
+			// Fechar com `!comando` em execução não pode largar o filho sem gravar o
+			// desfecho: quem fecha a sessão é o dono do storage, logo depois daqui.
+			await stopShell();
+		} finally {
+			tui.stop();
+			resolveExit({ code: exitCode });
+		}
+	}
+
+	/** Prazo para o filho morrer ao fechar; acima disso o desfecho é perdido. */
+	const SHELL_SETTLE_MS = 3_000;
+
+	/**
+	 * Cancela e conclui o `!comando` em execução.
+	 *
+	 * O prazo vale só para o **processo** terminar, não para o commit: se a
+	 * execução já produziu desfecho, o commit é aguardado sem prazo (é a promessa
+	 * de durabilidade). Se o processo não morrer no prazo — descendente que
+	 * escapou do grupo e mantém o pipe aberto — registra a interrupção sem
+	 * desfecho e segue. As duas escritas usam o mesmo `requestId`, então só uma
+	 * entrada existe.
+	 */
+	async function stopShell(): Promise<void> {
+		const active = shell;
+		if (active === undefined) return;
+		active.cancel();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<null>((resolve) => {
+			timer = setTimeout(() => resolve(null), SHELL_SETTLE_MS);
+		});
+		let result: ShellRun | null;
+		try {
+			result = await Promise.race([
+				active.executed.catch(() => null),
+				deadline,
+			]);
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
+		if (result !== null) {
+			// Processo terminou: o desfecho é o normal, mesmo que o commit demore.
+			await active.done.catch(() => undefined);
+			return;
+		}
+		if (active.interrupted) return;
+		active.interrupted = true;
+		try {
+			await commitShell(
+				active.session,
+				{
+					command: active.command,
+					exitCode: 130,
+					output: "",
+					aborted: true,
+				},
+				active.requestId,
+			);
+		} catch (error) {
+			process.stderr.write(
+				`!${active.command}: desfecho não gravado (${describe(error)})\n`,
+			);
+		}
 	}
 
 	function render(): void {
@@ -205,7 +287,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			if (token !== attachment) return;
 			if (end.reason === "failed") {
 				process.stderr.write(`sessão falhou: ${describe(end.error)}\n`);
-				finish(1);
+				void finish(1);
 			}
 		});
 
@@ -214,7 +296,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		// ou uma task de geração viva fica parada e a tela mente "ocioso".
 		next.harness.resume();
 		try {
-			const resumed = await resumePendingIntents(next, context);
+			const resumed = await resumePendingIntents(next, context, {
+				stopped: () => exited,
+			});
 			if (resumed > 0) {
 				notices.push(
 					resumed === 1
@@ -225,11 +309,13 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		} catch (error) {
 			notify(`falha ao retomar pedidos pendentes: ${describe(error)}`);
 		}
+		if (exited) return;
 		if (label !== undefined) notices.push(label);
 		render();
 	}
 
 	async function ask(prompt: string): Promise<void> {
+		if (exited) return;
 		if (turn !== undefined) {
 			notify("já existe uma geração em andamento");
 			return;
@@ -265,6 +351,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	}
 
 	async function shellCommand(command: string): Promise<void> {
+		if (exited) return;
 		if (command === "") {
 			notify("uso: !comando");
 			return;
@@ -275,17 +362,39 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 		}
 		// Contexto próprio: `Ctrl+C` cancela o filho sem cancelar a sessão.
 		const cancelable = withCancel(context);
-		shell = { cancel: cancelable.cancel };
+		const session = current;
+		const requestId = randomUUID();
+		const executed = executeShell(session, command, cancelable.context);
+		const state: ShellState = {
+			command,
+			session,
+			requestId,
+			cancel: cancelable.cancel,
+			executed,
+			interrupted: false,
+			done: Promise.resolve(),
+		};
+		shell = state;
 		render();
-		try {
-			const run = await runShell(current, command, cancelable.context);
-			if (run.aborted) notify(`!${command}: abortado`);
-		} catch (error) {
-			notify(`falha em !${command}: ${describe(error)}`);
-		} finally {
-			shell = undefined;
-			render();
-		}
+		const run = (async () => {
+			try {
+				const result = await executed;
+				if (state.interrupted) return;
+				await commitShell(session, result, requestId);
+				if (result.aborted) notify(`!${command}: abortado`);
+			} catch (error) {
+				if (!state.interrupted) {
+					notify(`falha em !${command}: ${describe(error)}`);
+				}
+			} finally {
+				if (shell === state) {
+					shell = undefined;
+					render();
+				}
+			}
+		})();
+		state.done = run;
+		await run;
 	}
 
 	/**
@@ -296,6 +405,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	async function switchSession(
 		open: (switcher: SessionSwitcher) => Promise<SwitchedSession>,
 	): Promise<void> {
+		if (exited) return;
 		if (sessions === undefined) {
 			notify("sessão efêmera (--no-session): /new e /resume indisponíveis");
 			return;
@@ -306,10 +416,18 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			notify("aguarde a geração terminar antes de trocar de sessão");
 			return;
 		}
+		// O desfecho do `!comando` pertence à sessão antiga; gravar antes de soltar.
+		if (shell !== undefined) await stopShell();
+		// O fechamento pode ter começado durante a espera: não monte sessão nova.
+		if (exited) return;
 		const previous = current;
 		await detach();
+		if (exited) return;
 		try {
 			const switched = await open(sessions);
+			// A abertura pode terminar depois do fechamento; o dono do storage
+			// fecha essa sessão no `finally` dele, então não a publique aqui.
+			if (exited) return;
 			await attach(switched.session, `sessão ${switched.id}`);
 		} catch (error) {
 			notify(`falha ao trocar de sessão: ${describe(error)}`);
@@ -419,7 +537,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			}
 			case "quit":
 			case "exit":
-				finish(0);
+				await finish(0);
 				return;
 			default:
 				notify(`comando desconhecido: /${name} ${rest.join(" ")}`.trimEnd());
@@ -427,16 +545,24 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	}
 
 	editor.onSubmit = (text) => {
+		if (exited) return;
 		const prompt = text.trim();
 		if (prompt === "") return;
 		editor.addToHistory(prompt);
-		if (prompt.startsWith("/")) void command(prompt);
-		else if (prompt.startsWith("!")) void shellCommand(prompt.slice(1).trim());
-		else void ask(prompt);
+		if (prompt.startsWith("/")) void command(prompt).catch(reportCommandError);
+		else if (prompt.startsWith("!"))
+			void shellCommand(prompt.slice(1).trim()).catch(reportCommandError);
+		else void ask(prompt).catch(reportCommandError);
 	};
+
+	/** Fronteira de despacho: comando que rejeita vira aviso, não crash. */
+	function reportCommandError(error: unknown): void {
+		notify(describe(error));
+	}
 
 	tui.addInputListener((data) => {
 		if (!matchesKey(data, "ctrl+c")) return undefined;
+		if (exited) return { consume: true };
 		// Primeiro `Ctrl+C` aborta a geração, via `conversation.abort()`; o
 		// segundo sai só quando não há nada em voo. `Submission.abort()` não serve:
 		// ele só retira o que está na fila e devolve `already_placed`.
@@ -481,7 +607,7 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				});
 			return { consume: true };
 		}
-		finish(exitCode);
+		void finish(exitCode);
 		return { consume: true };
 	});
 
