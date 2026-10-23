@@ -102,6 +102,8 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 	let stream: AgentEventStream | undefined;
 	/** Descarta eventos de um stream que já foi trocado. */
 	let attachment = 0;
+	/** Troca em andamento: sem sessão publicada entre `detach` e `attach`. */
+	let switching = false;
 
 	let state: Transcript = fromSnapshot(emptySnapshot());
 	let turn: Turn | undefined;
@@ -317,6 +319,10 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 
 	async function ask(prompt: string): Promise<void> {
 		if (exited) return;
+		if (switching) {
+			notify("troca de sessão em andamento");
+			return;
+		}
 		if (turn !== undefined) {
 			notify("já existe uma geração em andamento");
 			return;
@@ -353,6 +359,10 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 
 	async function shellCommand(command: string): Promise<void> {
 		if (exited) return;
+		if (switching) {
+			notify("troca de sessão em andamento");
+			return;
+		}
 		if (command === "") {
 			notify("uso: !comando");
 			return;
@@ -400,8 +410,9 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 
 	/**
 	 * Troca de sessão: para de observar, pede a troca ao dono do storage e
-	 * reata. Se a abertura falhar, volta para a sessão anterior, que só é
-	 * fechada depois que a nova abriu.
+	 * reata. A abertura vem antes do fechamento da anterior, então uma falha
+	 * ali é recuperável; falha depois da abertura não é — a anterior já não
+	 * existe e reatá-la seria desenhar um handle fechado.
 	 */
 	async function switchSession(
 		open: (switcher: SessionSwitcher) => Promise<SwitchedSession>,
@@ -411,28 +422,60 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 			notify("sessão efêmera (--no-session): /new e /resume indisponíveis");
 			return;
 		}
+		if (switching) {
+			notify("troca de sessão em andamento");
+			return;
+		}
 		// Trocar de banco no meio da geração perderia o turno: o Harness antigo
 		// fecha com a submissão em voo e ninguém mais a acompanha.
 		if (turn !== undefined) {
 			notify("aguarde a geração terminar antes de trocar de sessão");
 			return;
 		}
-		// O desfecho do `!comando` pertence à sessão antiga; gravar antes de soltar.
-		if (shell !== undefined) await stopShell();
-		// O fechamento pode ter começado durante a espera: não monte sessão nova.
-		if (exited) return;
-		const previous = current;
-		await detach();
-		if (exited) return;
+		// Reserva síncrona: `stopShell` pode demorar e uma segunda troca não pode
+		// atravessar a guarda durante a espera.
+		switching = true;
 		try {
-			const switched = await open(sessions);
-			// A abertura pode terminar depois do fechamento; o dono do storage
-			// fecha essa sessão no `finally` dele, então não a publique aqui.
+			// O desfecho do `!comando` pertence à sessão antiga; gravar antes de soltar.
+			if (shell !== undefined) await stopShell();
+			// O fechamento pode ter começado durante a espera: não monte sessão nova.
 			if (exited) return;
-			await attach(switched.session, `sessão ${switched.id}`);
-		} catch (error) {
-			notify(`falha ao trocar de sessão: ${describe(error)}`);
-			await attach(previous).catch(() => undefined);
+			const previous = current;
+			await detach();
+			if (exited) return;
+			let switched: SwitchedSession;
+			try {
+				switched = await open(sessions);
+			} catch (error) {
+				if (exited) return;
+				// O dono do storage só fecha a anterior depois que a nova abre:
+				// aqui ela continua viva e pode voltar a ser desenhada. Se nem isso
+				// funcionar, não há stream nem estado confiável: encerra.
+				let restored = true;
+				await attach(previous).catch((again: unknown) => {
+					restored = false;
+					const message = `falha ao reanexar a sessão anterior: ${describe(again)}`;
+					process.stderr.write(`${message}\n`);
+					notify(message);
+				});
+				if (!restored) {
+					await finish(1);
+					return;
+				}
+				notify(`falha ao trocar de sessão: ${describe(error)}`);
+				return;
+			}
+			if (exited) return;
+			try {
+				await attach(switched.session, `sessão ${switched.id}`);
+			} catch (error) {
+				const message = `falha ao anexar a sessão ${switched.id}: ${describe(error)}`;
+				process.stderr.write(`${message}\n`);
+				notify(message);
+				await finish(1);
+			}
+		} finally {
+			switching = false;
 		}
 	}
 
@@ -481,10 +524,18 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				notify(`${state.tokens} tokens nesta sessão`);
 				return;
 			case "compact":
+				if (switching) {
+					notify("troca de sessão em andamento");
+					return;
+				}
 				await current.conversation.compact(undefined, context);
 				notify("compactação pedida");
 				return;
 			case "model": {
+				if (switching) {
+					notify("troca de sessão em andamento");
+					return;
+				}
 				const text = rest.join(" ").trim();
 				if (text === "") {
 					notify(`modelo atual: ${modelLabel}`);
@@ -502,6 +553,10 @@ export async function runTui(options: TuiOptions): Promise<TuiExit> {
 				return;
 			}
 			case "thinking": {
+				if (switching) {
+					notify("troca de sessão em andamento");
+					return;
+				}
 				const level = rest.join(" ").trim();
 				if (level === "") {
 					notify(`nível atual: ${thinkingLevel}`);

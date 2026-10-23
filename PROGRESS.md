@@ -6,9 +6,9 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 - `main` em `dbb6a16` + PR do shell no fechamento: 130 testes em 21 arquivos,
   gates verdes (`typecheck`, `build`, `lint`, `test`).
-- M1.2 em andamento: itens 1, 3, 5 e 7 fechados com spec, teste do muse e
-  auditoria do Sol; restam o item 2 (falha de `attach` na troca), 4
-  (`void command()` sem `catch`) e 6 (`sessão: <id>` na falha de storage).
+- M1.2 em andamento: itens 1, 3, 5, 7 (PRs #40–#42) e agora 2 e 6 fechados
+  com spec, teste e auditoria do Sol; resta o item 4 (`void command()` sem
+  `catch`).
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão

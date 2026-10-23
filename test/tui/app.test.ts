@@ -383,6 +383,315 @@ describe("TUI", () => {
 		}
 	});
 
+	it("falha ao abrir a nova sessão reata a anterior e mantém o aviso", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-open-fail-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const open = (id: string) =>
+			openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+		const current = await open("s1");
+		const switcher = {
+			list: () => listSessions(dir),
+			open: (): Promise<never> => Promise.reject(new Error("disco cheio")),
+			create: (): Promise<never> => Promise.reject(new Error("disco cheio")),
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			const mark = terminal.writes.length;
+			terminal.send("/new");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.since(mark).includes("disco cheio"),
+				"aviso da falha",
+			);
+
+			// A anterior continua viva e aceita o próximo turno.
+			faux.setResponses([fauxAssistantMessage("ainda aqui")]);
+			terminal.send("pergunta");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("ainda aqui"),
+				"resposta na sessão anterior",
+			);
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(current, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falha ao anexar depois da abertura encerra com 1 sem reatar a anterior", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-attach-fail-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const open = (id: string) =>
+			openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+		const current = await open("s1");
+		// O dono do storage já teria fechado a anterior; a nova aberta morre
+		// antes do attachment — o watchEvents/agent falha.
+		const doomed = await open("s2");
+		await closeAgent(doomed, context);
+		const switcher = {
+			list: () => listSessions(dir),
+			open: () => Promise.resolve({ session: doomed, id: "s2" }),
+			create: () => Promise.resolve({ session: doomed, id: "s2" }),
+		};
+		const chunks: string[] = [];
+		const original = process.stderr.write.bind(process.stderr);
+		const capture = (chunk: unknown): boolean => {
+			chunks.push(String(chunk));
+			return true;
+		};
+		process.stderr.write = capture;
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("/new");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 1 });
+			expect(chunks.join("")).toContain("falha ao anexar a sessão s2");
+		} finally {
+			process.stderr.write = original;
+			await closeAgent(current, context);
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("troca em andamento recusa outra troca e entrada", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-serial-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const open = (id: string) =>
+			openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+		let current = await open("s1");
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let opened = 0;
+		const switcher = {
+			list: () => listSessions(dir),
+			open: async (id: string) => {
+				opened += 1;
+				await gate;
+				const session = await open(id);
+				const previous = current;
+				current = session;
+				await closeAgent(previous, context);
+				return { session, id };
+			},
+			create: async () => {
+				opened += 1;
+				await gate;
+				const id = newSessionId();
+				const session = await open(id);
+				const previous = current;
+				current = session;
+				await closeAgent(previous, context);
+				return { session, id };
+			},
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("/new");
+			terminal.send("\r");
+			// Um frame entre as entradas: como digitar, não um paste de dois comandos.
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			terminal.send("/new");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("troca de sessão em andamento"),
+				"segunda troca recusada",
+			);
+			const refused = (): number =>
+				terminal.text.split("troca de sessão em andamento").length - 1;
+			let expected = refused();
+			for (const entry of [
+				"prompt durante a troca",
+				"!echo durante a troca",
+				"/model outro/modelo",
+			]) {
+				terminal.send(entry);
+				terminal.send("\r");
+				expected += 1;
+				await waitFor(
+					() => refused() === expected,
+					`entrada recusada: ${entry}`,
+				);
+			}
+			expect(opened).toBe(1);
+
+			release?.();
+			await waitFor(
+				() => terminal.text.includes("sessão "),
+				"troca concluída",
+			);
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(current, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("troca com !comando em voo reserva antes de esperar e não abre duas", async () => {
+		const hasSetsid = await new Promise<boolean>((resolveCheck) => {
+			spawn("sh", ["-c", "command -v setsid"], { stdio: "ignore" })
+				.on("error", () => resolveCheck(false))
+				.on("close", (code) => resolveCheck(code === 0));
+		});
+		if (!hasSetsid) return;
+
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-shell-race-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		const open = (id: string) =>
+			openAgent(
+				{
+					dbPath: join(dir, `${id}.sqlite`),
+					cwd: dir,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+		let current = await open("s1");
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let opened = 0;
+		const switcher = {
+			list: () => listSessions(dir),
+			open: async (id: string) => {
+				opened += 1;
+				await gate;
+				const session = await open(id);
+				const previous = current;
+				current = session;
+				await closeAgent(previous, context);
+				return { session, id };
+			},
+			create: async () => {
+				opened += 1;
+				await gate;
+				const id = newSessionId();
+				const session = await open(id);
+				const previous = current;
+				current = session;
+				await closeAgent(previous, context);
+				return { session, id };
+			},
+		};
+
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({
+				session: current,
+				context,
+				terminal,
+				sessions: switcher,
+			});
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			// Descendente com o pipe aberto: o processo não termina, e o fechamento
+			// espera o prazo de 3 s. A janela da guarda fica observável.
+			const command = `!setsid bash -c 'while :; do echo vivo; sleep 0.05; done' &`;
+			for (const char of command) terminal.send(char);
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("shell"), "shell em voo");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			// O shell ainda está no prazo de término: a primeira troca espera ali.
+			terminal.send("/new");
+			terminal.send("\r");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			terminal.send("/new");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.text.includes("troca de sessão em andamento"),
+				"segunda troca recusada",
+			);
+
+			// Uma única abertura, e só depois que o shell terminou.
+			expect(opened).toBe(0);
+			await waitFor(() => opened === 1, "abertura única", 10_000);
+			expect(opened).toBe(1);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			expect(opened).toBe(1);
+
+			release?.();
+			await waitFor(() => terminal.text.includes("sessão "), "troca publicada");
+			terminal.send("/quit");
+			terminal.send("\r");
+			await expect(running).resolves.toEqual({ code: 0 });
+			await closeAgent(current, context);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	it("/resume sem argumento abre o seletor e troca no Enter", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "durable-tui-picker-"));
 		const open = async (id: string) => {
