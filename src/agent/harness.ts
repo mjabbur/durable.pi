@@ -228,6 +228,43 @@ export async function submit(
 	);
 }
 
+/**
+ * Reenvia intenções gravadas mas não admitidas — a janela entre o commit da
+ * intenção e o `conversation.submit()`. O `requestId` viaja junto, então um
+ * input já admitido volta como a mesma submissão em vez de virar duplicata; a
+ * intenção só é apagada depois do reenvio, e um crash no meio deixa a próxima
+ * abertura reenviar de novo.
+ *
+ * Observador não liga o scheduler: quem chama isto depois de reabrir precisa
+ * de `harness.resume()` para o trabalho andar.
+ */
+export async function resumePendingIntents(
+	session: AgentSession,
+	context: Context,
+): Promise<number> {
+	const { conversation } = session;
+	const pending = await conversation.commit(async (tx) => {
+		const control = await tx.doc(Control, conversation.id);
+		// O draft vira overlay: copie antes de sair do commit.
+		return control.pending.map((intent) => ({ ...intent }));
+	}, context);
+	if (pending.length === 0) return 0;
+
+	const resumed: string[] = [];
+	try {
+		for (const intent of pending) {
+			await conversation.submit(
+				{ type: "input", content: intent.prompt, requestId: intent.requestId },
+				context,
+			);
+			resumed.push(intent.requestId);
+		}
+	} finally {
+		await forgetPending(conversation, resumed, context);
+	}
+	return resumed.length;
+}
+
 /** Espera o desfecho da submissão, lê a resposta e limpa a intenção pendente. */
 export async function watch(
 	session: AgentSession,
@@ -309,10 +346,20 @@ async function clearPending(
 	context: Context,
 ): Promise<void> {
 	if (requestId === undefined) return;
+	await forgetPending(conversation, [requestId], context);
+}
+
+/** Remove as intenções indicadas; as demais continuam valendo para o próximo resume. */
+async function forgetPending(
+	conversation: Conversation,
+	requestIds: readonly string[],
+	context: Context,
+): Promise<void> {
+	if (requestIds.length === 0) return;
 	await conversation.commit(async (tx) => {
 		const control = await tx.doc(Control, conversation.id);
 		control.pending = control.pending.filter(
-			(intent) => intent.requestId !== requestId,
+			(intent) => !requestIds.includes(intent.requestId),
 		);
 	}, context);
 }

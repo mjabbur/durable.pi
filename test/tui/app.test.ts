@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
@@ -68,6 +70,11 @@ class FakeTerminal implements Terminal {
 	get text(): string {
 		return this.writes.join("");
 	}
+
+	/** Só o que foi escrito depois do marco: a TUI acumula frames, e "ocioso" do primeiro frame não prova nada. */
+	since(mark: number): string {
+		return this.writes.slice(mark).join("");
+	}
 }
 
 async function waitFor(
@@ -82,6 +89,30 @@ async function waitFor(
 		}
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
+}
+
+const CHILD = fileURLToPath(
+	new URL("../fixtures/main-child.mjs", import.meta.url),
+);
+
+/**
+ * Monta a sessão morta de SIGKILL na requisição ao modelo. `crash-admitted`
+ * limpa a intenção antes de morrer: restam submissão e task, sem fila a
+ * reconciliar, então só `harness.resume()` pode religar o scheduler.
+ */
+function crashChild(
+	sessionDir: string,
+	mode: "crash" | "crash-admitted" = "crash",
+): Promise<NodeJS.Signals | null> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(
+			process.execPath,
+			[CHILD, mode, sessionDir, "s1", "pedido antigo"],
+			{ cwd: process.cwd(), stdio: "ignore" },
+		);
+		child.on("error", reject);
+		child.on("close", (_code, signal) => resolve(signal));
+	});
 }
 
 async function withFake(
@@ -380,5 +411,203 @@ describe("TUI", () => {
 			await expect(running).resolves.toEqual({ code: 0 });
 			expect(terminal.text).not.toContain("resposta final");
 		});
+	});
+	it("retoma sem novo prompt a sessão que morreu com pedido pendente", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-resume-"));
+		const cwd = process.cwd();
+		try {
+			expect(await crashChild(dir, "crash-admitted")).toBe("SIGKILL");
+
+			const faux = fauxProvider();
+			const models = createModels();
+			models.setProvider(faux.provider);
+			const model = faux.getModel();
+			faux.setResponses([fauxAssistantMessage("retomada automática")]);
+			const handle = await openAgent(
+				{
+					dbPath: join(dir, "s1.sqlite"),
+					cwd,
+					model: { provider: model.provider, modelId: model.id },
+					models,
+				},
+				context,
+			);
+			try {
+				const terminal = new FakeTerminal();
+				const running = runTui({ session: handle, context, terminal });
+				// Nenhum prompt é reenviado: quem liga o scheduler é o `attach()`.
+				await waitFor(
+					() => terminal.text.includes("retomada automática"),
+					"resposta retomada",
+					15_000,
+				);
+
+				const view = await handle.conversation.context(context);
+				expect(
+					view.entries.filter((entry) => entry.kind === "pi.user"),
+				).toHaveLength(1);
+				expect(
+					view.entries.filter((entry) => entry.kind === "pi.assistant"),
+				).toHaveLength(1);
+				const inspection = await handle.harness.inspect(context);
+				expect(inspection.submissions).toHaveLength(0);
+
+				terminal.send("\u0003");
+				await expect(running).resolves.toEqual({ code: 0 });
+			} finally {
+				await closeAgent(handle, context);
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("Ctrl+C cancela a geração e só sai quando o turno termina", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-abort-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage("não deveria aparecer");
+			},
+			fauxAssistantMessage("depois do cancelamento"),
+		]);
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "session.sqlite"),
+				cwd: dir,
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("primeira");
+			terminal.send("\r");
+			await waitFor(() => terminal.text.includes("gerando"), "geração iniciada");
+
+			const mark = terminal.writes.length;
+			terminal.send("\u0003");
+			await waitFor(
+				() => terminal.since(mark).includes("cancelando"),
+				"cancelamento em curso",
+			);
+			// Segundo Ctrl+C no meio do aborto não pode encerrar a TUI.
+			terminal.send("\u0003");
+			await waitFor(
+				() => terminal.since(mark).includes("aguarde"),
+				"segundo Ctrl+C recusado",
+			);
+			// O aborto marca a task e espera a invocação em curso: com o provedor
+			// travado, "cancelando" só termina quando ele responde. A resposta
+			// atrasada não pode virar entrada.
+			const fimDoAborto = terminal.writes.length;
+			release();
+			await waitFor(
+				() => terminal.since(fimDoAborto).includes("ocioso"),
+				"turno encerrado",
+				15_000,
+			);
+
+			const view = await handle.conversation.context(context);
+			expect(
+				view.entries.filter((entry) => entry.kind === "pi.user"),
+			).toHaveLength(1);
+			expect(
+				view.entries.filter((entry) => entry.kind === "pi.assistant"),
+			).toHaveLength(0);
+			expect((await handle.harness.inspect(context)).submissions).toHaveLength(0);
+
+			// O loop continua utilizável depois do cancelamento.
+			const segundo = terminal.writes.length;
+			terminal.send("segunda");
+			terminal.send("\r");
+			await waitFor(
+				() => terminal.since(segundo).includes("depois do cancelamento"),
+				"segundo turno",
+			);
+			await waitFor(
+				() => terminal.since(segundo).includes("ocioso"),
+				"segundo turno encerrado",
+			);
+
+			terminal.send("\u0003");
+			await expect(running).resolves.toEqual({ code: 0 });
+		} finally {
+			release();
+			await closeAgent(handle, context);
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	it("duas entradas seguidas não abrem duas gerações", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "durable-tui-guard-"));
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const model = faux.getModel();
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		faux.setResponses([
+			async () => {
+				await gate;
+				return fauxAssistantMessage("única");
+			},
+		]);
+		const handle = await openAgent(
+			{
+				dbPath: join(dir, "session.sqlite"),
+				cwd: dir,
+				model: { provider: model.provider, modelId: model.id },
+				models,
+			},
+			context,
+		);
+		try {
+			const terminal = new FakeTerminal();
+			const running = runTui({ session: handle, context, terminal });
+			await waitFor(() => terminal.text.includes("ocioso"), "primeiro render");
+
+			terminal.send("um");
+			terminal.send("\r");
+			terminal.send("dois");
+			terminal.send("\r");
+
+			await waitFor(
+				() => terminal.text.includes("já existe uma geração"),
+				"segunda entrada recusada",
+			);
+			const mark = terminal.writes.length;
+			release();
+			await waitFor(
+				() => terminal.since(mark).includes("ocioso"),
+				"turno encerrado",
+			);
+
+			const view = await handle.conversation.context(context);
+			expect(
+				view.entries.filter((entry) => entry.kind === "pi.user"),
+			).toHaveLength(1);
+
+			terminal.send("\u0003");
+			await expect(running).resolves.toEqual({ code: 0 });
+		} finally {
+			release();
+			await closeAgent(handle, context);
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });

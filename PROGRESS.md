@@ -4,8 +4,8 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` com a TUI completa do M1, 116 testes em 20 arquivos, gates verdes
-  (`typecheck`, `build`, `lint`, `test`).
+- `main` com a TUI completa do M1 e a correção do M1.1, 120 testes em 20
+  arquivos, gates verdes (`typecheck`, `build`, `lint`, `test`).
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
@@ -16,6 +16,12 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
   Aceite de crash coberto por teste de processo: `SIGKILL` depois de o efeito
   de uma tool estar commitado, retomada com `--session`, um par chamada/resultado
   e o efeito não repetido.
+- M1.1: auditoria externa (`docs/audits/2026-10-22-m1-1.md`) mostrou que o aceite
+  valia só no modo `-p`. A TUI agora chama `harness.resume()` e reconcilia as
+  intenções pendentes no `attach()`, aborta com `conversation.abort()` e reserva
+  o turno antes do primeiro `await`. Coberto por `test/tui/app.test.ts` (retomada
+  sem novo prompt, cancelamento com provedor travado, duas entradas seguidas) e
+  por `resumePendingIntents` em `test/agent/harness.test.ts`.
 - Recuperação e precedência de modelo provadas pelo `main()`; resta só o lock
   entre dois containers reais.
 
@@ -88,6 +94,16 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   (`kind: "durable.shell"`), então o bloco sobrevive ao resume sem entrar no
   contexto do modelo. Comando interrompido não é reexecutado: não há intenção
   durável para ele, só o resultado.
+- Observador não liga o scheduler: `watchEvents` só lê. Quem reabre chama
+  `harness.resume()`, e as intenções de `Control.pending` são reenviadas com o
+  mesmo `requestId` (`resumePendingIntents`), que é idempotente. Sem os dois,
+  reabrir mostrava "ocioso" com submissão parada.
+- Aborto de geração é `conversation.abort()`, que marca a task e espera o
+  escopo ficar idle; `Submission.abort()` só retira input na fila e devolve
+  `already_placed` para o que já começou. O turno é reservado antes do primeiro
+  `await` e liberado só pelo dono, para duas entradas não abrirem duas gerações.
+- Troca de sessão é recusada com geração em voo: fechar o Harness antigo deixaria
+  a submissão sem quem a acompanhe.
 - Troca de sessão é do `main()`, não da TUI: `runTui` recebe um `SessionSwitcher`
   (`list`/`open`/`create`) e só pede. A troca abre a sessão nova antes de fechar
   a anterior — lock é por arquivo, então os dois Harnesss não disputam o mesmo
@@ -115,6 +131,12 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 
 ## Pendências
 
+- Sobras da auditoria do M1.1 (médias/baixas, em `docs/audits/2026-10-22-m1-1.md`):
+  `/quit`/`/new` com `!comando` em execução perde o registro; falha de `attach`
+  na troca apaga o próprio aviso; reducer ignora `text_start`/`block`/`message`
+  e o slot `done` do snapshot sobrescreve resultado lido; `void command()` sem
+  `catch`; saída externa sem sanitizar ANSI/OSC; falha de storage na TUI não
+  imprime `sessão: <id>`; `parseModelRef` aceita partes em branco.
 - Push a partir do container (M3): sem credencial dentro; push no host.
 - Gate de `test/spec/` no CI: decidir como distinguir correção de spec de teste
   acomodado (duas perguntas antigas continuam válidas).
