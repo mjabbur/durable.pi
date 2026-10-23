@@ -1,4 +1,4 @@
-import type { Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
 	CompactionEntry,
@@ -7,6 +7,7 @@ import {
 	UserEntry,
 	type AgentEvent,
 	type EntryRecord,
+	type MessageChange,
 	type SnapshotEvent,
 	type UsageState,
 } from "@earendil-works/pi-durable";
@@ -40,6 +41,12 @@ export type TranscriptBlock =
 	  }
 	| { readonly kind: "notice"; readonly text: string };
 
+/** Bloco da mensagem em voo, por `contentIndex`. */
+type PartialBlock = {
+	readonly kind: "text" | "thinking" | "toolcall";
+	readonly text: string;
+};
+
 export type Transcript = {
 	readonly blocks: readonly TranscriptBlock[];
 	/** Mensagem em voo: existe entre `message_start` e `message_end`. */
@@ -47,6 +54,8 @@ export type Transcript = {
 		readonly text: string;
 		readonly thinking: string;
 	} | undefined;
+	/** Partes do parcial; `streaming` é derivado delas. */
+	readonly parts: readonly PartialBlock[];
 	/** Entradas já aplicadas, para que `entry_appended` e `message_end` não dupliquem. */
 	readonly seen: readonly string[];
 	readonly queued: number;
@@ -61,6 +70,7 @@ export function emptyTranscript(): Transcript {
 	return {
 		blocks: [],
 		streaming: undefined,
+		parts: [],
 		seen: [],
 		queued: 0,
 		running: false,
@@ -83,18 +93,28 @@ export function fromSnapshot(snapshot: SnapshotEvent): Transcript {
 	for (const entry of snapshot.entries) state = appendEntry(state, entry);
 
 	// Slots ao vivo cobrem a chamada de tool atual, que ainda não tem entrada.
+	// Slot concluído cujo resultado já veio na lista de entradas não sobrescreve
+	// o que foi lido: senão a saída some e um erro vira sucesso.
 	for (const tool of snapshot.tools) {
+		const existing = toolBlock(state, tool.callId);
+		if (existing !== undefined && existing.status !== "running") continue;
 		state = upsertTool(state, {
 			kind: "tool",
 			callId: tool.callId,
 			name: tool.name,
-			status: tool.status === "done" ? "done" : "running",
+			// `done` sem `entry` é task que falhou ou ficou órfã; não é sucesso.
+			status:
+				tool.status !== "done"
+					? "running"
+					: tool.entry === undefined
+						? "error"
+						: "done",
 			output: tool.output ?? "",
 		});
 	}
 
 	if (snapshot.generation?.message !== undefined) {
-		state = { ...state, streaming: partsOf(snapshot.generation.message) };
+		state = withParts(state, partsFromMessage(snapshot.generation.message));
 	}
 
 	return state;
@@ -122,28 +142,17 @@ function applyEvent(state: Transcript, event: AgentEvent): Transcript {
 			return { ...state, queued: event.items.length };
 		case "message_start":
 			return event.message.role === "assistant"
-				? { ...state, streaming: { text: "", thinking: "" } }
+				? withParts(state, partsFromMessage(event.message))
 				: state;
-		case "message_update": {
-			const streaming = state.streaming;
-			if (streaming === undefined) return state;
-			let text = streaming.text;
-			let thinking = streaming.thinking;
-			for (const change of event.changes) {
-				if (change.type === "text_delta") text += change.delta;
-				else if (change.type === "thinking_delta") thinking += change.delta;
-			}
-			return { ...state, streaming: { text, thinking } };
-		}
+		case "message_update":
+			return withParts(state, applyChanges(state.parts, event.changes));
 		case "message_end":
-			return appendEntry({ ...state, streaming: undefined }, event.entry);
+			return appendEntry(withParts(state, []), event.entry);
 		case "entry_appended":
 			// Uma entrada de assistente também finaliza a mensagem em voo; de tool ou
 			// usuário, não — o parcial continua na tela até o `message_end`.
 			return appendEntry(
-				AssistantEntry.is(event.entry)
-					? { ...state, streaming: undefined }
-					: state,
+				AssistantEntry.is(event.entry) ? withParts(state, []) : state,
 				event.entry,
 			);
 		case "tool_execution_start":
@@ -306,14 +315,99 @@ function applyToolOutput(
 	output: { trimStart?: number; append?: string } | { set: string } | undefined,
 ): string {
 	if (output === undefined) return current;
-	const next = "set" in output ? output.set : current + (output.append ?? "");
-	return clip(next);
+	// `trimStart` é relativo à janela do produtor, não ao recorte de exibição:
+	// guarde a janela inteira e deixe o corte visual para o componente.
+	const next =
+		"set" in output
+			? output.set
+			: (output.trimStart === undefined
+					? current
+					: current.slice(output.trimStart)) + (output.append ?? "");
+	return next;
 }
 
 function clip(text: string): string {
 	return text.length <= MAX_TOOL_OUTPUT
 		? text
 		: `…${text.slice(-MAX_TOOL_OUTPUT)}`;
+}
+
+function partsFromMessage(message: Message | undefined): PartialBlock[] {
+	if (message?.role !== "assistant") return [];
+	return message.content.map((block) =>
+		block.type === "text"
+			? { kind: "text" as const, text: block.text }
+			: block.type === "thinking"
+				? { kind: "thinking" as const, text: block.thinking }
+				: { kind: "toolcall" as const, text: "" },
+	);
+}
+
+function applyChanges(
+	parts: readonly PartialBlock[],
+	changes: readonly MessageChange[],
+): PartialBlock[] {
+	let next = [...parts];
+	for (const change of changes) {
+		switch (change.type) {
+			case "text_start":
+			case "thinking_start":
+			case "toolcall_start":
+			case "block": {
+				next[change.contentIndex] = partialFromBlock(change.block);
+				break;
+			}
+			case "text_delta":
+				next = appendPart(next, change.contentIndex, "text", change.delta);
+				break;
+			case "thinking_delta":
+				next = appendPart(next, change.contentIndex, "thinking", change.delta);
+				break;
+			case "toolcall_delta":
+				break;
+			case "message":
+				// Substituição vale para o resto do lote: mudanças seguintes aplicam
+				// sobre ela, como qualquer outra.
+				next = partsFromMessage(change.message);
+				break;
+		}
+	}
+	return next;
+}
+
+function partialFromBlock(block: AssistantMessage["content"][number]): PartialBlock {
+	if (block.type === "text") return { kind: "text", text: block.text };
+	if (block.type === "thinking") return { kind: "thinking", text: block.thinking };
+	return { kind: "toolcall", text: "" };
+}
+
+function appendPart(
+	parts: PartialBlock[],
+	index: number,
+	kind: "text" | "thinking",
+	delta: string,
+): PartialBlock[] {
+	const current = parts[index];
+	parts[index] =
+		current === undefined || current.kind !== kind
+			? { kind, text: delta }
+			: { kind, text: current.text + delta };
+	return parts;
+}
+
+/** Deriva `streaming` das partes; `parts` vazio significa nenhuma mensagem em voo. */
+function withParts(state: Transcript, parts: readonly PartialBlock[]): Transcript {
+	if (parts.length === 0) {
+		return { ...state, parts, streaming: undefined };
+	}
+	let text = "";
+	let thinking = "";
+	for (const part of parts) {
+		if (part === undefined) continue;
+		if (part.kind === "text") text += part.text;
+		else if (part.kind === "thinking") thinking += part.text;
+	}
+	return { ...state, parts, streaming: { text, thinking } };
 }
 
 function partsOf(

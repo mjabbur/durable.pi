@@ -149,6 +149,73 @@ describe("transcript da TUI", () => {
 		}
 	});
 
+	it("trimStart vale sobre a janela do produtor, não sobre o recorte visual", () => {
+		const tool = (output: { trimStart?: number; append?: string } | { set: string }) =>
+			({
+				type: "tool_execution_update",
+				toolCallId: "c1",
+				toolName: "bash",
+				output,
+				args: {},
+			}) as unknown as AgentEvent;
+		const started = applyEvents(emptyTranscript(), [
+			{
+				type: "tool_execution_start",
+				toolCallId: "c1",
+				toolName: "bash",
+				args: {},
+			} as unknown as AgentEvent,
+			tool({ set: "a".repeat(5_000) }),
+		]);
+		const trimmed = applyEvents(started, [tool({ trimStart: 100, append: "X" })]);
+		const block = trimmed.blocks[0];
+		expect(block?.kind).toBe("tool");
+		if (block?.kind !== "tool") throw new Error("bloco de tool esperado");
+		// 5 000 - 100 + 1: o corte é do protocolo, não do que a TUI desenha.
+		expect(block.output).toHaveLength(4_901);
+		expect(block.output.endsWith("X")).toBe(true);
+	});
+
+	it("substituição por `message` não descarta mudanças seguintes do lote", () => {
+		const message = {
+			role: "assistant",
+			content: [{ type: "text", text: "A" }],
+		};
+		const state = applyEvents(emptyTranscript(), [
+			{ type: "message_start", message } as unknown as AgentEvent,
+			{
+				type: "message_update",
+				usage: {},
+				changes: [
+					{ type: "message", message },
+					{ type: "text_delta", contentIndex: 0, delta: "B" },
+				],
+			} as unknown as AgentEvent,
+		]);
+		expect(state.streaming?.text).toBe("AB");
+	});
+
+	it("finalização de assistente via `entry_appended` limpa as partes", () => {
+		let state = applyEvents(emptyTranscript(), [
+			{
+				type: "message_start",
+				message: { role: "assistant", content: [{ type: "text", text: "velho" }] },
+			} as unknown as AgentEvent,
+		]);
+		expect(state.streaming?.text).toBe("velho");
+		state = applyEvents(state, [
+			{
+				type: "entry_appended",
+				entry: { id: 1, conversationId: 0, kind: "pi.assistant" },
+			} as unknown as AgentEvent,
+		]);
+		// Um update vazio depois não pode ressuscitar o parcial antigo.
+		state = applyEvents(state, [
+			{ type: "message_update", usage: {}, changes: [] } as unknown as AgentEvent,
+		]);
+		expect(state.streaming).toBeUndefined();
+	});
+
 	it("chamada de tool vira um único bloco com o status do resultado", async () => {
 		const { session, batches, snapshot } = await runWithEvents(
 			[
