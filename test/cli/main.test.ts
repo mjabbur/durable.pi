@@ -7,8 +7,11 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { closeAgent, openAgent } from "../../src/agent/harness.js";
+import { sessionPath } from "../../src/agent/sessions.js";
 import { main } from "../../src/cli/main.js";
 
 let stdout: string;
@@ -91,6 +94,61 @@ describe("main", () => {
 
 		expect(code).toBe(0);
 		expect(stdout).toContain("resposta");
+	});
+
+	it("sessão aberta durante o encerramento não é publicada nem fica travada", async () => {
+		const { models, ref } = fauxCatalog("race");
+		await writeFile(configPath, JSON.stringify({ model: ref }));
+		const dir = await mkdtemp(join(tmpdir(), "durable-cli-race-"));
+		let outcome: Promise<string> | undefined;
+		const stdinTTY = process.stdin.isTTY;
+		const stdoutTTY = process.stdout.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+		try {
+			const code = await main(["--session-dir", dir, "--session", "s1"], {
+				models,
+				runTui: (options) => {
+					// A abertura começa e fica em voo enquanto a TUI já saiu.
+					const opening = options.sessions?.open("s2");
+					outcome = opening?.then(
+						() => "publicada",
+						(error: unknown) =>
+							error instanceof Error ? error.message : String(error),
+					);
+					return Promise.resolve({ code: 0 });
+				},
+			});
+
+			expect(code).toBe(0);
+			await expect(outcome).resolves.toContain("não foi publicada");
+			// A sessão candidata foi fechada: reabrir não disputa o lock.
+			const [provider, modelId] = ref.split("/");
+			if (provider === undefined || modelId === undefined) {
+				throw new Error("ref faux inesperado");
+			}
+			const reopened = await openAgent(
+				{
+					dbPath: sessionPath(dir, "s2"),
+					cwd: process.cwd(),
+					model: { provider, modelId },
+					models,
+				},
+				BACKGROUND_CONTEXT,
+			);
+			await closeAgent(reopened, BACKGROUND_CONTEXT);
+			expect(stderr).not.toContain("sessão:");
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", {
+				value: stdinTTY,
+				configurable: true,
+			});
+			Object.defineProperty(process.stdout, "isTTY", {
+				value: stdoutTTY,
+				configurable: true,
+			});
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("DURABLE_PI_MODEL vence o arquivo de config", async () => {

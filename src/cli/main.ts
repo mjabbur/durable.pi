@@ -23,9 +23,11 @@ import {
 	type SessionOptions,
 } from "./args.js";
 import {
-	runTui,
+	runTui as runTuiDefault,
 	type SessionSwitcher,
 	type SwitchedSession,
+	type TuiExit,
+	type TuiOptions,
 } from "../tui/app.js";
 
 /**
@@ -36,6 +38,8 @@ import {
  */
 export type MainDeps = {
 	readonly models?: Models;
+	/** Dublê do laço interativo; o teste injeta falha de storage sem TTY real. */
+	readonly runTui?: (options: TuiOptions) => Promise<TuiExit>;
 };
 
 /** Ponto de entrada do CLI. Devolve o código de saída em vez de chamar `process.exit`. */
@@ -73,6 +77,16 @@ export async function main(
 	let session: AgentSession | undefined;
 	let sessionId: string | undefined;
 	let code = 1;
+	// O `finally` marca antes de fechar: uma abertura em voo não pode publicar
+	// uma sessão depois da limpeza (ela ficaria sem dono).
+	let stopping = false;
+	// Uma dica por execução, sempre a última: a troca de sessão atualiza o id.
+	let hinted = false;
+	const hint = (): void => {
+		if (hinted || sessionId === undefined || ephemeral) return;
+		hinted = true;
+		writeResumeHint(sessionId);
+	};
 
 	try {
 		if (options.noSession) {
@@ -107,6 +121,14 @@ export async function main(
 		 */
 		const swapSession = async (nextId: string): Promise<SwitchedSession> => {
 			const opened = await openSession(nextId);
+			if (stopping) {
+				await closeAgent(opened, context).catch((error: unknown) => {
+					process.stderr.write(
+						`falha ao fechar a sessão aberta durante o encerramento: ${describe(error)}\n`,
+					);
+				});
+				throw new Error("encerrando: a sessão aberta não foi publicada");
+			}
 			const previous = session;
 			session = opened;
 			sessionId = nextId;
@@ -132,7 +154,7 @@ export async function main(
 						create: () => swapSession(newSessionId()),
 					};
 			code = (
-				await runTui({
+				await (deps.runTui ?? runTuiDefault)({
 					session,
 					context,
 					...(switcher === undefined ? {} : { sessions: switcher }),
@@ -147,24 +169,27 @@ export async function main(
 				process.stderr.write(
 					`sem resposta: ${outcome.reason ?? "unanswered"}\n`,
 				);
-				writeResumeHint(sessionId);
+				hint();
 				code = 1;
 			}
 		}
 	} catch (error) {
 		if (error instanceof UsageError) return usageFailure(error);
 		process.stderr.write(`${describe(error)}\n`);
-		writeResumeHint(sessionId);
+		hint();
 		code = 1;
 	} finally {
+		stopping = true;
+		// Referência fixa: uma abertura concorrente não pode trocar o que fecha.
+		const closing = session;
 		// Limpeza não pode esconder o erro principal nem trocar um sucesso por falha
 		// silenciosa: reporta e rebaixa o código só se ele ainda for 0.
-		if (session !== undefined) {
+		if (closing !== undefined) {
 			try {
-				await closeAgent(session, context);
+				await closeAgent(closing, context);
 				// A TUI pode ter resolvido a saída antes de o Harness anunciar a
 				// falha; o código de saída não pode esconder um storage quebrado.
-				const end = await session.harness.closed;
+				const end = await closing.harness.closed;
 				if (end.reason === "failed" && code === 0) code = 1;
 			} catch (error) {
 				process.stderr.write(`falha ao fechar a sessão: ${describe(error)}\n`);
@@ -179,6 +204,9 @@ export async function main(
 				if (code === 0) code = 1;
 			}
 		}
+		// A TUI resolve a saída antes de o `main()` fechar o storage: a falha só
+		// aparece aqui. Sem a dica, o código 1 não diz qual sessão reabrir.
+		if (code !== 0) hint();
 	}
 
 	return code;
