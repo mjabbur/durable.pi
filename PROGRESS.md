@@ -6,8 +6,8 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 - `main` em `dbb6a16` + PR do shell no fechamento: 130 testes em 21 arquivos,
   gates verdes (`typecheck`, `build`, `lint`, `test`).
-- M1.2 em andamento: item 1 (médias da auditoria) fechado com spec, teste do
-  muse e duas auditorias do Sol; restam os itens 2–7 da seção "Próximo".
+- M1.2 em andamento: itens 1 e 3 fechados com spec, teste do muse e auditoria
+  do Sol; restam os itens 2 e 4–7 da seção "Próximo".
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
@@ -137,10 +137,12 @@ Ordem sugerida, cada item com teste:
    apagado por `notices.length = 0` e o reattach de handle fechado é silenciado.
    Emitir o aviso depois do reattach e distinguir falha de abertura de falha
    após a troca.
-3. Exibição no reducer (`src/tui/transcript.ts`): tratar `text_start`,
-   `thinking_start`, `block` e substituição por `message`; no término, preferir
-   o resultado final; `applyToolOutput` precisa honrar `trimStart`; slot `done`
-   do snapshot não pode sobrescrever resultado já lido.
+3. ~~Exibição no reducer~~: feito em `specs/transcript-events/`. `parts` por
+   `contentIndex` com `streaming` derivado; variantes `text_start`/`thinking_start`/
+   `block`/`message`; `trimStart` sobre a janela do produtor (recorte só na
+   exibição); slot `done` do snapshot não sobrescreve resultado lido e `done`
+   sem `entry` aparece como erro. Cobertura: `test/spec/transcript-events.test.ts`
+   (muse) + três testes manuais em `test/tui/transcript.test.ts`.
 4. `void command(prompt)` sem `catch` (`src/tui/app.ts:374`) → aviso central em
    vez de `unhandledRejection`.
 5. Sanitizar ANSI/OSC da saída externa (shell e tools) antes de renderizar.
@@ -206,6 +208,9 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 - `main()` interativo só roda com TTY, então o teste de troca de sessão é na
   TUI, com terminal falso e um `SessionSwitcher` de teste; o caminho
   `main()`→`swapSession` não tem teste próprio (é cola fina sobre `openAgent`).
+- `trimStart` de `tool_execution_update` é contado na janela do produtor, em
+  unidades UTF-16, e não no texto já recortado pela TUI: guarde a janela e
+  corte só ao desenhar.
 - Em fechamento, não use a promise `done` (execução + commit) como sinal de
   "processo travado": commit lento vira interrupção falsa. Espere a execução,
   depois o commit sem prazo.
