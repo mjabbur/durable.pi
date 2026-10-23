@@ -178,6 +178,12 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 ## Pendências
 
 - Auditoria de 2026-10-23 (`docs/audits/2026-10-23-{core,cli-tui,tests}.md`):
+  contratos corrigidos em `specs/` (PR de specs): `model-ref` sem contradição em
+  `a/b/`, `Transcript.parts` publicado, evento fora da união não suportado,
+  cast proibido nas notas, `handoff` com `workspace` e `SessionFailed`, e
+  `command-errors` separando recuperável de fatal. Testes gerados não foram
+  regenerados: os exemplos e as asserções não mudaram; regeneração fica para a
+  próxima mudança de comportamento.
   médias fechadas. Em aberto e priorizadas: watchdog de encerramento com
   provedor que ignora cancelamento; Ctrl+C antes da admissão; `resumePendingIntents`
   perde a associação implícita; limpeza de segredos no `run.sh`; ciclo de vida

@@ -7,8 +7,17 @@ estado durável é a conversa; nenhum cliente pode ser dono dela.
 API (assinaturas exatas):
 
 ```ts
-openAgent(options: { dbPath, cwd, model, instructions?, models? }, ctx)
-  : Promise<{ harness, conversation, lock }>
+openAgent(
+  options: {
+    dbPath: string;
+    cwd: string;
+    workspace?: string;   // identidade do host; default: cwd
+    model: ModelRef;
+    instructions?: string;
+    models?: Models;      // injetável para teste
+  },
+  ctx,
+): Promise<{ harness, conversation, lock }>
 submit(session, prompt: string, ctx, requestId?: string): Promise<Submission>
 watch(session, submission, ctx): Promise<AskOutcome>
 ask(session, prompt: string, ctx, requestId?: string): Promise<AskOutcome>
@@ -49,8 +58,9 @@ Invariantes numeradas:
 8. Resposta do modelo com `stopReason: "error"` produz `status: "unanswered"` e
    `reason` preenchido, sem `answer`.
 9. O handle de `Submission` pertence ao Harness que o emitiu: depois de
-   `closeAgent()`, `watch()` sobre ele rejeita com erro de sessão fechada. Handoff
-   entre frontends é feito por `requestId` (invariante 5), nunca reusando handle.
+   `closeAgent()`, `watch()` sobre ele rejeita com `SessionFailed`, cuja mensagem
+   indica sessão fechada (não basta "qualquer erro"). Handoff entre frontends é
+   feito por `requestId` (invariante 5), nunca reusando handle.
 10. `ask()` é equivalente a `submit()` seguido de `watch()`.
 11. A sessão pertence a um workspace: reabrir o mesmo banco com outro
     `workspace` falha, mesmo que o `cwd` seja igual.

@@ -30,22 +30,22 @@ Nenhum efeito externo: funções puras sobre dados.
 5. Deltas acumulam no `contentIndex` certo, na ordem recebida; `text` e
    `thinking` do parcial são a soma dos blocos, na ordem dos índices.
 6. `message_end` remove o parcial e acrescenta o bloco final.
-7a. `tool_execution_end` com entrada de resultado comprometida usa o texto
-    final, mesmo que já exista progresso exibido; progresso antigo não pode
-    esconder erro/diagnóstico. Sem entrada, o progresso é o fallback.
-8. `tool_execution_update` com `{ trimStart, append }` corta o início atual
+7. `tool_execution_update` com `{ trimStart, append }` corta o início atual
    antes de acrescentar; com `{ set }` substitui a saída. `trimStart` é relativo
    à janela do produtor (unidades UTF-16), não ao recorte de exibição.
-8. `fromSnapshot` não sobrescreve resultado já lido: um slot `done` cujo
+8. `tool_execution_end` com entrada de resultado comprometida usa o texto
+   final, mesmo que já exista progresso exibido; progresso antigo não pode
+   esconder erro/diagnóstico. Sem entrada, o progresso é o fallback.
+9. `fromSnapshot` não sobrescreve resultado já lido: um slot `done` cujo
    resultado já está nas entradas não troca saída nem transforma erro em
    sucesso.
-9. `fromSnapshot` mostra o parcial de `generation.message`.
-10. `applyEvents` é puro: devolve estado novo e não muta o recebido.
+10. `fromSnapshot` mostra o parcial de `generation.message`.
+11. `applyEvents` é puro: devolve estado novo e não muta o recebido.
 
 ## Falhas visíveis
 
-Nenhuma: são funções puras. Entrada desconhecida é ignorada e o estado
-permanece igual.
+Nenhuma: são funções puras. O contrato cobre os tipos de `AgentEvent` da
+versão fixada do pacote; um evento fora dessa união não é suportado.
 
 ## API
 
@@ -55,6 +55,11 @@ import type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
 export type Transcript = {
 	readonly blocks: readonly TranscriptBlock[];
 	readonly streaming: { text: string; thinking: string } | undefined;
+	/** Blocos do parcial por `contentIndex`; `streaming` é derivado deles. */
+	readonly parts: readonly {
+		readonly kind: "text" | "thinking" | "toolcall";
+		readonly text: string;
+	}[];
 	readonly seen: readonly string[];
 	readonly queued: number;
 	readonly running: boolean;
@@ -72,8 +77,9 @@ export function applyEvents(
 ## Notas para o teste gerado
 
 - Importe de `../src/tui/transcript.js`; `TranscriptBlock` também é exportado.
-- Os tipos de evento são grandes: monte o mínimo e use `as SnapshotEvent` /
-  `as AgentEvent` só onde o TypeScript exigir.
+- Os tipos de evento são grandes: monte builders tipados com os campos
+  obrigatórios. Não use `as`/`as unknown as` para silenciar o compilador; dados
+  incompletos só em teste de entrada inválida, declarado no nome.
 - Não dependa de campo interno além dos exportados acima.
 - Evite `async` sem `await`; o lint do repositório roda no teste.
 - `contentIndex` fora de ordem não é erro: o parcial ordena por índice.
@@ -85,3 +91,4 @@ export function applyEvents(
 - [ ] cada teste cita o item de Comportamento correspondente
 - [ ] nenhum teste depende de detalhe interno não exportado
 - [ ] teste de slot `done` usa entrada de erro e saída não vazia
+- [ ] teste de `parts` cobre índice fora de ordem e campo derivado

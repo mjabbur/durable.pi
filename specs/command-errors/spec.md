@@ -22,9 +22,12 @@ aviso e não a repete.
 
 ## Comportamento
 
-1. Rejeição em qualquer comando (`/resume` com `list` falhando, `/compact`,
-   `/model`, `/thinking`) vira aviso na TUI com o motivo.
-2. A TUI continua utilizável depois do aviso: o próximo prompt é aceito.
+1. Rejeição de erro operacional recuperável em comando (`/resume` com `list`
+   falhando, `/compact`, `/model`, `/thinking`) vira aviso na TUI com o motivo.
+2. Depois de um erro **recuperável**, a TUI continua utilizável: o próximo
+   prompt é aceito. Falha depois da publicação de uma nova sessão não é
+   recuperável: segue `specs/session-switch/spec.md` (encerra com código 1), e
+   falha terminal do Harness segue o item 5.
 3. Nenhuma rejeição escapa como `unhandledRejection` durante o caso acima.
 4. `onSelect` do seletor usa a mesma fronteira de despacho: falha ao abrir a
    sessão escolhida não deixa rejeição sem tratamento (o aviso pode vir da
