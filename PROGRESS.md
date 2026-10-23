@@ -4,8 +4,9 @@ Handoff. Estado, decisões e próximo passo; detalhe fica em `docs/`.
 
 ## Estado
 
-- `main` com a TUI completa do M1 e a correção do M1.1, 120 testes em 20
-  arquivos, gates verdes (`typecheck`, `build`, `lint`, `test`).
+- `main` em `dbb6a16`: TUI do M1 e correção do M1.1, 120 testes em 20 arquivos,
+  gates verdes (`typecheck`, `build`, `lint`, `test`). Árvore limpa.
+- Próximo marco: médias da auditoria do M1.1 (seção "Próximo"), não o M2.
 - CLI `durable-pi -p` funcional sobre SQLite: sessões, `--model`, `--session`,
   `-c`, `--no-session`, config de modelo, lock, workspace do host.
 - Imagem validada no WSL com `wslc` 3.0.3.0 (build, volume, bind, sessão
@@ -110,7 +111,34 @@ scripts/run.sh --runtime-info                       # detecta runtime sem execut
   storage — e a TUI para o `watchEvents` antigo antes de reatar no novo, com um
   contador de attachment para descartar eventos atrasados.
 
-## Próximo: M2 — paridade durável
+## Próximo: fechar as médias da auditoria do M1.1
+
+Decisão do dono em 2026-10-22: as médias vêm antes do M2. O memd foi atualizado
+nessa data (instalação de versão nova); `P-021` rev 2 está ativa com a lista.
+Ordem sugerida, cada item com teste:
+
+1. `!comando` no fechamento (ainda é buraco de durabilidade): `/quit` e `/new`
+   com shell rodando perdem o registro — confirmado com exit 0 e zero entradas
+   `durable.shell` ao reabrir. `finish()` e `switchSession()` precisam cancelar
+   ou aguardar o shell antes de soltar a sessão; se o desfecho for desconhecido,
+   gravar entrada explícita de interrupção. Teste: comando bloqueado, `/quit`,
+   liberar o filho, reabrir e exigir desfecho registrado (ou "interrompido"),
+   nunca ausência.
+2. Falha de `attach` na troca (`src/tui/app.ts`, `switchSession`): o aviso é
+   apagado por `notices.length = 0` e o reattach de handle fechado é silenciado.
+   Emitir o aviso depois do reattach e distinguir falha de abertura de falha
+   após a troca.
+3. Exibição no reducer (`src/tui/transcript.ts`): tratar `text_start`,
+   `thinking_start`, `block` e substituição por `message`; no término, preferir
+   o resultado final; `applyToolOutput` precisa honrar `trimStart`; slot `done`
+   do snapshot não pode sobrescrever resultado já lido.
+4. `void command(prompt)` sem `catch` (`src/tui/app.ts:374`) → aviso central em
+   vez de `unhandledRejection`.
+5. Sanitizar ANSI/OSC da saída externa (shell e tools) antes de renderizar.
+6. Falha de storage na TUI: imprimir `sessão: <id>` como o modo `-p` faz.
+7. `parseModelRef` rejeitar partes só com espaços.
+
+Depois disso, M2 — paridade durável:
 
 O que já está de pé no M1: TUI com streaming, abort por `Ctrl+C` (segundo sai),
 `/help`, `/usage`, `/compact`, `/model`, `/thinking`, `/new`, `/resume`,
@@ -169,6 +197,17 @@ web do M3 existir, o CLI/TUI passa a anexar ao `serve` em vez de abrir o banco.
 - `main()` interativo só roda com TTY, então o teste de troca de sessão é na
   TUI, com terminal falso e um `SessionSwitcher` de teste; o caminho
   `main()`→`swapSession` não tem teste próprio (é cola fina sobre `openAgent`).
+- `conversation.abort()` marca a task e espera a invocação em curso: com
+  provedor que ignora o sinal, o status fica em "cancelando" até ele responder.
+  O teste solta o provedor e só então exige idle e descarte da resposta.
+- `waitForIdle()` pode resolver antes de o `watch()` limpar o turno. Em teste de
+  `Ctrl+C`, espere um frame novo com "ocioso" (`terminal.since(marca)`) — usar
+  `terminal.text` acumulado dá falso positivo do primeiro render.
+- `vitest -t "Ctrl+C"` é regex: o `+` faz o filtro não casar e o arquivo inteiro
+  aparece como "skipped". Use outro trecho do nome.
+- Fixture `main-child.mjs` tem o modo `crash-admitted`: submissão colocada,
+  `Control.pending` limpo e `SIGKILL` na requisição, para que só `resume()`
+  possa concluir (isola a retomada da reconciliação de intenções).
 
 ## Bloqueios
 
